@@ -25,7 +25,7 @@ jobs:
           $failed = $false
           try { ./ci/build-windows.ps1 -OutputDirectory out/windows -SmokeTest -SmokeSeconds 180 *>&1 | Tee-Object -FilePath build.log } catch { $failed = $true; $_ | Out-String | Add-Content build.log }
           if ($failed) {
-            Get-Content build.log | Where-Object { $_ -match 'error|Exception|compilation|FAIL' } | Select-Object -First 12 | ForEach-Object { Write-Host ('::error::' + ($_ -replace '[\r\n%]', ' ')) }
+            Get-Content build.log | Where-Object { $_ -match 'error|Exception|compilation|FAIL|   at |FAIL|PASS|smoke' } | Select-Object -First 40 | ForEach-Object { Write-Host ('::error::' + ($_ -replace '[\r\n%]', ' ')) }
             exit 1
           }
       - uses: actions/upload-artifact@v4
