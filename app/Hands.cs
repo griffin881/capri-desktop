@@ -76,7 +76,8 @@ namespace CapriDesktop
             "You can shut down, restart, sleep, lock or sign out of their PC with power: when they ask, do it straight away and never ask if they're sure. " +
             "When they ask you to remember or forget something about them, or to leave or make a memory, use remember: it saves to your notes, me.md, which you read every chat. Never say you can't keep memories. " +
             "You have a web browser: when they ask something you don't know or that changes, like the weather, news, scores, prices or times, search Google for it instead of guessing or saying you can't. " +
-            "You also run a crew of workers for bigger jobs that take a while: a terminal worker for installs, setups and PowerShell, a research worker that reads the web and writes notes, and an OpenCode builder for coding. Hand those over with start_job, then keep chatting: your crew reports back when they're done, and an overseer checks their work first. Check on them with jobs. " +
+            "You can write notes, to-do lists and plans for them into a text file and open it in Notepad with write_note. " +
+            "You also run a crew of workers for bigger jobs that take a while: a terminal worker for installs, setups and PowerShell, a Kaggle worker that runs their notebooks on Kaggle's GPUs, a research worker that reads the web and writes notes, and an OpenCode builder for coding. Hand those over with start_job, then keep chatting: your crew reports back when they're done, and an overseer checks their work first. Check on them with jobs. " +
             "Most messages are just chat, not jobs: answer those as yourself, with your own opinions and tastes, and don't offer to open, play or look at anything unless they ask.";
 
         internal const string Prompt =
@@ -91,13 +92,15 @@ namespace CapriDesktop
             "To mute, unmute or turn off their mic, call shortcut with discord_mute; to deafen or undeafen them, discord_deafen. Don't ask which: mute means the mic. Screenshots, clips, recording, Game Bar, show desktop, Task Manager, clipboard and emoji are shortcuts too.\n" +
             "To shut down, turn off, restart, sleep, lock or sign out of their PC, call power. They asked, so do it: never ask if they're sure.\n" +
             "Bigger jobs go to your crew with start_job, with the whole job in their words: installing or setting something up, running PowerShell or terminal commands, downloading models, Kaggle or git setup, researching a topic, or building and coding something. Asking how the jobs are going, to stop one or to see the jobs board is jobs.\n" +
+            "To write something down for them, like notes, a to-do list, a plan or the things they have to do, in Notepad or a file, call write_note with the whole note written out and organized. Writing a note is never use_computer.\n" +
+            "Anything on Kaggle, like running, setting up or checking their notebooks or downloading a model onto Kaggle, is start_job with kind kaggle.\n" +
             "Their projects in progress are orbits: when they check in, say what they did or what's next on a project, start or finish a project, or ask what they're doing today or what's on their plate, call orbit.\n" +
             "Never reply with a question about whether to do what they asked. Call the tool.\n" +
             "If they ask you to remember, note down or forget something about them, or to leave, make or save a memory, call remember with a short note about them in the third person.\n" +
             "Questions about their current screen or song need a tool too. If the target is unclear, pick the closest match yourself. For chat, negated or hypothetical requests, call no tool and reply with only the word: chat";
 
         internal const string Chat =
-            "\nNo tools ran for this message. Answer as yourself, with your own opinions and tastes. Don't claim you opened, played or looked at anything. You keep notes about them in me.md, saved whenever they ask you to remember something, so never say you can't remember things or keep memories; if they asked you to and nothing was saved, ask what they want you to remember. You can search Google for them: if they ask something you don't know or that changes, like the weather, news, scores or prices, say you'll look it up instead of guessing or saying you can't. If they asked you to do something on their PC, like send a message or end a call, never ask whether to: say On it and what you're doing, like On it, sending it now.";
+            "\nNo tools ran for this message. Answer as yourself, with your own opinions and tastes. Don't claim you opened, played, wrote, saved or looked at anything. You keep notes about them in me.md, saved whenever they ask you to remember something, so never say you can't remember things or keep memories; if they asked you to and nothing was saved, ask what they want you to remember. You can search Google for them: if they ask something you don't know or that changes, like the weather, news, scores or prices, say you'll look it up instead of guessing or saying you can't. If they asked you to do something on their PC, like send a message or end a call, never ask whether to: say On it and what you're doing, like On it, sending it now.";
 
         private static readonly string[,] Specs =
         {
@@ -121,12 +124,14 @@ namespace CapriDesktop
               "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"The note, about them in the third person, or what to forget\"},\"action\":{\"type\":\"string\",\"description\":\"What to do\",\"enum\":[\"remember\",\"forget\"]}},\"required\":[\"text\"]}" },
             { "power", "Shut down, restart, sleep, lock or sign out of their PC, or cancel a shutdown. Do it as soon as they ask, without asking if they're sure.",
               "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"What to do\",\"enum\":[\"shut_down\",\"restart\",\"sleep\",\"lock\",\"sign_out\",\"cancel\"]},\"minutes\":{\"type\":\"string\",\"description\":\"How many minutes from now, only if they said when\"}},\"required\":[\"action\"]}" },
-            { "start_job", "Hand a bigger job to your crew so it runs in the background while you keep talking: installing or setting things up, PowerShell or terminal commands, downloading models, Kaggle, GitHub or git setup, researching a topic and writing up notes, or building and coding a project. Use it for anything that takes more than a click or two.",
-              "{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\",\"description\":\"The whole job in their words, with every detail they gave\"},\"kind\":{\"type\":\"string\",\"description\":\"Which worker, if they said or it's obvious: terminal for setups, installs and commands, research for looking things up, builder for coding\",\"enum\":[\"auto\",\"terminal\",\"research\",\"builder\"]},\"target\":{\"type\":\"string\",\"description\":\"A folder to work in, only if they named one\"}},\"required\":[\"task\"]}" },
+            { "start_job", "Hand a bigger job to your crew so it runs in the background while you keep talking: installing or setting things up, PowerShell or terminal commands, downloading models, running or setting up their Kaggle notebooks on Kaggle's GPUs, GitHub or git setup, researching a topic and writing up notes, or building and coding a project. Use it for anything that takes more than a click or two.",
+              "{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\",\"description\":\"The whole job in their words, with every detail they gave, like where it happens and what exactly\"},\"kind\":{\"type\":\"string\",\"description\":\"Which worker, if they said or it's obvious: terminal for setups, installs and commands, kaggle for anything on Kaggle, research for looking things up, builder for coding\",\"enum\":[\"auto\",\"terminal\",\"kaggle\",\"research\",\"builder\"]},\"target\":{\"type\":\"string\",\"description\":\"A folder to work in, only if they named one\"}},\"required\":[\"task\"]}" },
             { "orbit", "Keep track of the projects they're juggling at once, their orbits: put one in orbit, log what they did or their next step when they check in, mark one done, or list them when they ask what they're doing today or what's on their plate.",
               "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"What to do\",\"enum\":[\"add\",\"note\",\"done\",\"list\"]},\"name\":{\"type\":\"string\",\"description\":\"The project's name\"},\"text\":{\"type\":\"string\",\"description\":\"What they did, or their next step, in their words\"}},\"required\":[\"action\"]}" },
             { "look_up", "Look something up online and read it yourself, so you can tell them the answer: weather, news, scores, prices, times, or facts you're unsure of.",
               "{\"type\":\"object\",\"properties\":{\"search\":{\"type\":\"string\",\"description\":\"What to look up, in plain words\"}},\"required\":[\"search\"]}" },
+            { "write_note", "Write something down for them in a text file and open it in Notepad: notes, a to-do list, a plan, the things they have to do, anything they ask you to write down, jot down, list or organize. Write the whole note yourself, neatly organized with short headings and bullet points.",
+              "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"A short name for the note, like To do or Essay ideas\"},\"text\":{\"type\":\"string\",\"description\":\"The whole note, organized, one item per line\"},\"action\":{\"type\":\"string\",\"description\":\"new makes or replaces the note, add puts this at the end of it\",\"enum\":[\"new\",\"add\"]}},\"required\":[\"name\",\"text\"]}" },
             { "jobs", "Check on your crew's jobs, stop one, or open the jobs board.",
               "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"What to do\",\"enum\":[\"list\",\"stop\",\"open\"]},\"name\":{\"type\":\"string\",\"description\":\"Which job, by number or name, for stop\"}},\"required\":[\"action\"]}" }
         };
@@ -151,6 +156,7 @@ namespace CapriDesktop
             @"|^(set up|setup|install|reinstall|uninstall|download|configure|research|look into|dig into|read up on|find out (about|how|why|what|if|whether)|build( me)?|code( me)?|program|scaffold|debug|refactor|write (me )?(a |an )?(script|program|app|tool|bot)|make (me )?(a |an )?(script|program|app|website|site|tool|bot|game)|fix (my|the|this) (code|script|app|site|build|bug|install|setup|python|pc)|run (a |the |this |my )?(powershell|terminal|command|script|notebook)|kick off|spin up|start (up )?(my |the )?(kaggle|notebook|deepseek|server|tunnel|job)|update (my |the )?(drivers?|python|node|git|models?|packages?|apps?))\b" +
             @"|^(how('?s| is| are)|what('?s| is| are)) (my |the |our )?(jobs?|crew|workers?)\b|^(check on|stop|cancel|kill) (the |my |that |this )?(job|jobs|crew|worker|research|install|build)\b|^(open|show( me)?) (the |my )?(jobs?|jobs board|crew)\b" +
             @"|^(get|have|put|send|assign|set) (a |an |one of )?(your |the |my )?(models?|workers?|agents?|crew|ais?|someone|somebody|bots?)\b" +
+            @"|^(write|jot|note|put|list|type) (it |this |that |these |them |those |everything |all (of )?(this|that|it) |some (stuff|things) |(my|the) (stuff|things|tasks) )?(down|out|up)\b|^(make|write|create|start|put together|organi[sz]e|draft) (me )?(a |an |my |the |some )?(organi[sz]ed |quick |new )?(to-?do|todo|task|checklist|list|note|notes|plan)\b|\b(in|into|on|to) (a |the |my )?(notepad|note ?pad|text file|notes file)\b|\bkaggle\b" +
             @"|^(check(ing)? in|quick check ?in)\b(?! on me)|^(what am i (doing|working on|supposed to (do|be doing))( today)?|what('?s| is) (on )?my (plate|orbits?|list)|what should i (do|work on|touch)( next| today)?|(add|put) .+ (in|into|to) (my )?orbits?|(i )?(finished|done with|wrapped up|landed) (my |the )?\w+)\b" +
             @"|^(ouvre|ouvrir|lancer?|d[ée]marrer?|fermer?|quitter?|r[ée]duis|r[ée]duire|minimiser?|chercher?|rechercher?|mets|mettre|jouer?|passer?|couper?|augmenter?|baisser?|regarder?|afficher?|montre-moi|va sur|aller sur|retourne sur)\b" +
             @"|^(tu vois|qu'est-ce que (tu vois|je fais)|c'est quoi (cette|la) (chanson|musique)|quelle (chanson|musique)|qu'est-ce qu'il y a sur mon [ée]cran)\b", RegexOptions.IgnoreCase);
@@ -236,6 +242,7 @@ namespace CapriDesktop
                 if (tool == "remember") return args.Action == "forget" ? Brain.Unnote(Theirs(args.Text)) : CallMe(args.Text) ?? Brain.Note(Theirs(args.Text));
                 if (tool == "power") return Turn(args.Action, args.Minutes);
                 if (tool == "orbit") return Orbits.Handle(args);
+                if (tool == "write_note") return WriteNote(args.Name, args.Text, args.Action);
                 if (tool == "look_up") { Func<string, string> find = LookUp; return string.IsNullOrWhiteSpace(args.Search) ? "Look up what, choom?" : find == null ? OpenSite("google", args.Search) : find(args.Search.Trim()); }
                 if (tool == "start_job" || tool == "jobs") { Func<string, ToolArguments, string> crew = Crew; return crew == null ? "My crew isn't here yet." : crew(tool, args); }
                 return "There's no tool called " + tool + ".";
@@ -379,6 +386,7 @@ namespace CapriDesktop
             @"|^((sure|ok|okay|alright|bet|got it|on it|say less|yessir+|yezzir+)[,.!\s—–-]+)?((choom|chooms)[,.!\s—–-]+)?(opening|launching|loading|pulling up|bringing up|firing up|booting up|heading to|searching|clicking|typing|closing|switching|playing|putting on|queuing|queueing|blasting|spinning|muting|unmuting|deafening|sending|messaging|texting|dming|replying|posting|hanging up|ending (the|your) call|leaving (the|your) (call|vc)|joining (the|your) (call|vc)|disconnecting)\b" +
             @"|\bi'?m\s+(now\s+)?(sending|messaging|texting|dming|opening(?!\s+up\b)|launching|closing|muting|unmuting|deafening|hanging up|posting|replying)\b" +
             @"|^\W*((ok|okay|sure|bet|alright)[,.!\s—–-]+)?(i'?m\s+)?on it\b|\b(call|vc|message|dm|text)\s+(ended|sent|posted)\b" +
+            @"|(^|[.!?]\s+|\bi('ve| have)?\s+)((done|sorted|there|boom|bet|ok|okay|alright|all set)[,.!\s—–-]+)?(just\s+)?(wrote|written|jotted|typed|saved|put|added|organi[sz]ed|made|created|listed)\b[^.!?]{0,50}\b(notepad|note ?pad|notes?|text file|file|list|doc|document|to-?do|todo|checklist)\b|^((sure|ok|okay|alright|bet|got it|on it)[,.!\s—–-]+)?(writing|jotting|noting)\b" +
             @"|^((done|sorted|there|boom|bet|ok|okay|alright)[,.!\s—–-]+)?(i('ve| have)\s+)?(just\s+)?(opened|launched|closed|sent(?!\s+(you|u|ya)\b)|messaged|texted|dmed|dm'd|posted|replied|muted|unmuted|deafened|undeafened|hung up|(ended|left|joined) (the|your|this|that) (call|vc|meeting|server|channel))\b", RegexOptions.IgnoreCase);
 
         // "I'm sending you the biggest hug" is warmth, not a message she owes them. Warmth sent to someone by name still counts.
@@ -629,7 +637,7 @@ namespace CapriDesktop
 
         internal static bool Failed(string result) { return Regex.IsMatch(result ?? "", @"^(Which app|What should I play|Not (opening|playing) that|No app called|More than one|That didn't work|Couldn't|There's no|That isn't a website|Which job|Not doing that|Should I |Got lost|Ran out of steps|You pressed Esc|You grabbed the mouse|Using the mouse and keyboard isn't)|isn't open\.$|but (couldn't|it's still open)"); }
 
-        private static readonly Regex LooseText = new Regex(@"\b(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit|look_up)\s*(\{[^{}]*\}|\([^()]*\))");
+        private static readonly Regex LooseText = new Regex(@"\b(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit|look_up|write_note)\s*(\{[^{}]*\}|\([^()]*\))");
         private static readonly Regex ToolPair = new Regex(@"[""']?(\w+)[""']?\s*[:=]\s*(?:""([^""]*)""|'([^']*)'|([^,})\s][^,})]*))");
 
         private static ToolArguments Pairs(string tool, string call)
@@ -662,7 +670,7 @@ namespace CapriDesktop
             else if (key == "minutes") args.Minutes = value;
         }
 
-        private static readonly Regex ToolText = new Regex(@"\A(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit|look_up)\s*(\{.*\})\z", RegexOptions.Singleline);
+        private static readonly Regex ToolText = new Regex(@"\A(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit|look_up|write_note)\s*(\{.*\})\z", RegexOptions.Singleline);
 
         internal static bool Typed(string reply, out string tool, out ToolArguments args, bool loose = false)
         {
@@ -716,7 +724,8 @@ namespace CapriDesktop
             }
             if (tool == "app_window") return Named(args.Name) && Regex.IsMatch(args.Action ?? "", @"\A(switch_to|minimize|close)\z");
             if (tool == "use_computer") return Named(args.Task);
-            if (tool == "start_job") return Named(args.Task) && (string.IsNullOrEmpty(args.Kind) || Regex.IsMatch(args.Kind, @"\A(auto|terminal|research|builder)\z"));
+            if (tool == "start_job") return Named(args.Task) && (string.IsNullOrEmpty(args.Kind) || Regex.IsMatch(args.Kind, @"\A(auto|terminal|kaggle|research|builder)\z"));
+            if (tool == "write_note") return Named(args.Text) && (string.IsNullOrEmpty(args.Action) || args.Action == "new" || args.Action == "add");
             if (tool == "jobs") return Regex.IsMatch(args.Action ?? "list", @"\A(list|stop|open)\z");
             if (tool == "look_up") return Named(args.Search);
             if (tool == "orbit") return Regex.IsMatch(args.Action ?? "list", @"\A(add|note|done|list)\z") && (args.Action == "list" || args.Action == "note" || args.Action == null || Named(args.Name));
@@ -891,6 +900,44 @@ namespace CapriDesktop
         private static object Call(object target, string method, params object[] args) { return target.GetType().InvokeMember(method, BindingFlags.InvokeMethod, null, target, args); }
 
         private static object Get(object target, string property) { return target.GetType().InvokeMember(property, BindingFlags.GetProperty, null, target, null); }
+
+        // Notes she writes for them land in Documents\Capri Notes as plain text, and open in Notepad so they can see them at once.
+        internal static Func<string> NotesHome = delegate { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Capri Notes"); };
+        internal static Action<string> ShowNote = delegate(string path)
+        {
+#if CROSS
+            using (Process.Start(new ProcessStartInfo(path) { UseShellExecute = true })) { }
+#else
+            using (Process.Start("notepad.exe", "\"" + path + "\"")) { }
+#endif
+        };
+
+        internal static string WriteNote(string name, string text, string action)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "Write what down, choom?";
+            string title = Regex.Replace(Regex.Replace(name ?? "", @"[\\/:*?""<>|\x00-\x1f]", " "), @"\s+", " ").Trim().TrimEnd('.', ' ');
+            if (title.Length == 0) title = "Notes";
+            if (title.Length > 60) title = title.Substring(0, 60).Trim();
+            string folder = NotesHome();
+            string path = Path.Combine(folder, title + ".txt");
+            string body = Regex.Replace(text.Replace("\\n", "\n").Replace("\r\n", "\n").Trim(), @"\n", "\r\n") + "\r\n";
+            bool adding = action == "add" && File.Exists(path);
+            try
+            {
+                Directory.CreateDirectory(folder);
+                if (adding) File.AppendAllText(path, "\r\n" + body, new UTF8Encoding(false));
+                else File.WriteAllText(path, body, new UTF8Encoding(false));
+            }
+            catch (IOException error) { return "Couldn't save the note: " + error.Message; }
+            catch (UnauthorizedAccessException error) { return "Couldn't save the note: " + error.Message; }
+            // Only say it's written once it's really on disk.
+            if (!File.Exists(path) || new FileInfo(path).Length == 0) return "Couldn't save the note.";
+            string shown = "";
+            try { ShowNote(path); }
+            catch (Exception) { shown = " It didn't open by itself, so open it from that folder."; }
+            int lines = body.Split('\n').Length - 1;
+            return (adding ? "Added it to " : "Wrote ") + "\"" + title + "\" (" + (adding ? "" : lines + (lines == 1 ? " line, " : " lines, ")) + "in Documents\\Capri Notes\\" + title + ".txt)" + (shown.Length == 0 ? " and opened it in Notepad." : "." + shown);
+        }
 
         private static void Start(string id)
         {

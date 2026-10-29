@@ -186,6 +186,7 @@ namespace CapriDesktop
                     if (attempt > 1) Note(gig, "Second try, with the overseer's notes.");
                     if (gig.Worker == "research") Research(gig, brain, notes);
                     else if (gig.Worker == "builder") Build(gig, notes);
+                    else if (gig.Worker == "kaggle") Terminal(gig, brain, notes, KagglePrompt + KaggleState());
                     else Terminal(gig, brain, notes);
                     if (gig.Stop) { Finish(gig, "stopped", "Stopped " + gig.Title + ". " + (gig.Result ?? "")); return; }
                     Set(gig, "reviewing");
@@ -215,10 +216,11 @@ namespace CapriDesktop
         private const string PlanPrompt =
             "You plan jobs for Capri's crew. Capri is a cocky, fiery desktop companion and the user's partner, living on their Windows PC, and her crew does the bigger jobs in the background.\n" +
             "Workers:\n" +
-            "- terminal: runs PowerShell on their PC. Installs, setups, downloads, models, Kaggle, git, moving or making files, checking things.\n" +
+            "- terminal: runs PowerShell on their PC. Installs, setups, downloads, models, git, moving or making files, checking things.\n" +
+            "- kaggle: anything on Kaggle. Runs and sets up their Kaggle notebooks on Kaggle's free GPUs from this PC with the kaggle command: making or editing a notebook, starting a run, checking on it, getting its output, downloading a model onto Kaggle.\n" +
             "- research: searches the web and reads pages, then writes up notes.\n" +
             "- builder: OpenCode, a coding agent that writes and edits code in a project folder.\n" +
-            "Reply with only JSON, no other text: {\"title\": \"a short name for the job, 2 to 5 words\", \"worker\": \"terminal|research|builder\", \"plan\": \"what Capri says out loud about the plan\"}.\n" +
+            "Reply with only JSON, no other text: {\"title\": \"a short name for the job, 2 to 5 words\", \"worker\": \"terminal|kaggle|research|builder\", \"plan\": \"what Capri says out loud about the plan\"}.\n" +
             "Use the talk around the job to work out what they really meant (which thing, where), and plan for that.\n" +
             "The plan is Capri talking to them, casual and in first person, one or two sentences: what she's putting which worker on and how it'll go, and which brain is doing the thinking. " +
             "Talk like a friend, not an assistant: no lists, no step numbers, no 'I will now', no 'Certainly', no 'Here's the plan'. Vary how you start it.";
@@ -234,7 +236,7 @@ namespace CapriDesktop
             {
                 if (!string.IsNullOrWhiteSpace(plan.Title)) gig.Title = Shorten(plan.Title);
                 string worker = (plan.Worker ?? "").Trim().ToLowerInvariant();
-                if (worker == "terminal" || worker == "research" || (worker == "builder" && HasOpenCode)) gig.Worker = worker;
+                if (worker == "terminal" || worker == "kaggle" || worker == "research" || (worker == "builder" && HasOpenCode)) gig.Worker = worker;
                 if (!string.IsNullOrWhiteSpace(plan.Plan)) gig.Plan = Brain.Visible(plan.Plan).Trim();
             }
             if (string.IsNullOrWhiteSpace(gig.Plan)) gig.Plan = "Putting my " + WorkerName(gig.Worker) + " worker on " + gig.Title + ", with " + gig.Mind + " doing the thinking. I'll tell you when it's done.";
@@ -254,13 +256,14 @@ namespace CapriDesktop
             "Jobs are often short, like \"download DeepSeek\": read what you two were just talking about to work out what they meant, like which model, which site or which machine (a job about a Kaggle notebook happens on Kaggle, through the kaggle command, not on this PC). Don't install some other app just because its name matches. If it's still unclear what they want, don't guess: call finish with action failed and ask them the one question that settles it.\n" +
             "Check your work before you finish, like running the program's --version or listing the files. Then call finish with action done and what you did, what they need to know and where things are, in plain words.";
 
-        private void Terminal(Gig gig, Brain brain, string notes)
+        private void Terminal(Gig gig, Brain brain, string notes, string extra = null)
         {
+            string prompt = TerminalPrompt + (extra ?? "");
             List<string> steps = new List<string>();
             for (int step = 0; step < MaxSteps && !gig.Stop; step++)
             {
                 List<KeyValuePair<string, ToolArguments>> calls = new List<KeyValuePair<string, ToolArguments>>();
-                string written = brain.Step(TerminalPrompt, Brief(gig, notes, steps), Render(TerminalTools, false), Render(TerminalTools, true), Listing(TerminalTools), calls, 700);
+                string written = brain.Step(prompt, Brief(gig, notes, steps), Render(TerminalTools, false), Render(TerminalTools, true), Listing(TerminalTools), calls, 700);
                 string tool;
                 ToolArguments args;
                 if (!Pick(calls, written, out tool, out args)) { steps.Add("(You replied without a tool call. Call exactly one tool.)"); continue; }
@@ -719,14 +722,63 @@ namespace CapriDesktop
         internal static string Pick(string kind, string ask)
         {
             string k = (kind ?? "").Trim().ToLowerInvariant();
-            if (k == "terminal" || k == "research") return k;
+            if (k == "terminal" || k == "research" || k == "kaggle") return k;
             if (k == "builder") return HasOpenCode ? "builder" : "terminal";
+            // Anything on Kaggle, setting up its command included, goes to the worker that knows Kaggle.
+            if (Regex.IsMatch(ask ?? "", @"\bkaggle\b", RegexOptions.IgnoreCase)) return "kaggle";
             if (Regex.IsMatch(ask ?? "", @"\b(research|look into|look up|find out|read up|dig into|learn about|what('s| is| are)|who (is|are|was)|compare|summari[sz]e|news (on|about)|explain)\b", RegexOptions.IgnoreCase)) return "research";
             if (HasOpenCode && Regex.IsMatch(ask ?? "", @"\b(build|code|program|refactor|debug|make (me )?(a|an) (app|site|website|web ?app|script|tool|bot|game|extension|plugin|api)|write (me )?(a|an|the) (script|program|app|function|class)|fix (the|my|this) (code|bug|app|site|script|build))\b", RegexOptions.IgnoreCase)) return "builder";
             return "terminal";
         }
 
-        internal static string WorkerName(string worker) { return worker == "research" ? "research" : worker == "builder" ? "OpenCode builder" : "terminal"; }
+        internal static string WorkerName(string worker) { return worker == "research" ? "research" : worker == "builder" ? "OpenCode builder" : worker == "kaggle" ? "Kaggle" : "terminal"; }
+
+        // ---- Kaggle ------------------------------------------------------------------------------------------
+
+        // The kaggle command reads its key from these files, so a key saved here works for her workers and for them in any terminal.
+        internal static string KaggleHome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".kaggle");
+
+        internal static bool KaggleReady
+        {
+            get
+            {
+                if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("KAGGLE_API_TOKEN")) || (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("KAGGLE_USERNAME")) && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("KAGGLE_KEY")))) return true;
+                try { return File.Exists(Path.Combine(KaggleHome, "access_token")) || File.Exists(Path.Combine(KaggleHome, "kaggle.json")); }
+                catch (Exception) { return false; }
+            }
+        }
+
+        // A new-style API token goes in access_token; a pasted kaggle.json (the legacy key) goes in kaggle.json. Blank does nothing.
+        internal static string SaveKaggle(string pasted)
+        {
+            string text = (pasted ?? "").Trim();
+            if (text.Length == 0) return KaggleReady ? "Kaggle key saved." : "Paste a Kaggle API token first.";
+            bool legacy = text.StartsWith("{", StringComparison.Ordinal);
+            if (legacy ? !Regex.IsMatch(text, @"""username""\s*:\s*""[^""]+"".*""key""\s*:\s*""[0-9a-fA-F]{20,}""|""key""\s*:\s*""[0-9a-fA-F]{20,}"".*""username""\s*:\s*""[^""]+""", RegexOptions.Singleline) : !Regex.IsMatch(text, @"\A[A-Za-z0-9_\-\.]{20,400}\z"))
+                return "That doesn't look like a Kaggle API token. Copy it from kaggle.com/settings/api.";
+            try
+            {
+                Directory.CreateDirectory(KaggleHome);
+                File.WriteAllText(Path.Combine(KaggleHome, legacy ? "kaggle.json" : "access_token"), text, new UTF8Encoding(false));
+            }
+            catch (Exception error) { return "Couldn't save it: " + error.Message; }
+            return "Kaggle key saved. Her Kaggle worker can use it now.";
+        }
+
+        private static string KaggleState()
+        {
+            return KaggleReady ? "\nTheir Kaggle key is saved, so kaggle commands are signed in." : "\nTheir Kaggle key isn't saved yet. Try the kaggle command once; if it says it isn't authenticated, finish with action failed and tell them: open her Jobs board, paste a token from kaggle.com/settings/api (Generate New Token) into the Kaggle box, then ask again. Never ask for the key in chat.";
+        }
+
+        private const string KagglePrompt =
+            "\nYou're her Kaggle worker: you run their Kaggle notebooks on Kaggle's free GPUs from this PC, with the kaggle command.\n" +
+            "If kaggle isn't installed, install it with py -m pip install --user --upgrade kaggle (or python -m pip if py is missing). If the kaggle command still isn't found, run it as py -m kaggle.\n" +
+            "kaggle kernels list --mine shows their notebooks. kaggle kernels pull <user>/<slug> -p <folder> -m downloads one with its kernel-metadata.json, so you can edit it and push it back.\n" +
+            "To run code on Kaggle, put the .ipynb or .py in a folder of the job folder with a kernel-metadata.json: {\"id\": \"<user>/<slug>\", \"title\": \"<title, its slug must match>\", \"code_file\": \"<file>\", \"language\": \"python\", \"kernel_type\": \"script or notebook\", \"is_private\": \"true\", \"enable_gpu\": \"true\", \"enable_internet\": \"true\", \"machine_shape\": \"NvidiaTeslaT4\"} (NvidiaTeslaT4 is GPU T4 x2). Then kaggle kernels push -p <folder> --accelerator NvidiaTeslaT4 saves it and starts a full run in the cloud, up to 12 hours on a GPU.\n" +
+            "kaggle kernels status <user>/<slug> says if it's queued, running, complete or errored, and kaggle kernels output <user>/<slug> -p <folder> downloads its log and files. Check status a few times with Start-Sleep between, but don't wait more than a few minutes in total: finish with it running and say how far it got and how to watch it (its page is https://www.kaggle.com/code/<user>/<slug>).\n" +
+            "Their username is the first part of their notebook ids, or in the output of kaggle config view.\n" +
+            "Big downloads like model weights happen inside the notebook on Kaggle (huggingface_hub or wget, into /kaggle/working or /kaggle/tmp), never on this PC: their laptop has little disk. Kaggle disk and GPU memory are limited, so check a model fits before you pick it.\n" +
+            "If you change one of their existing notebooks, push it as a new version of the same id; never delete their notebooks or datasets.";
 
         private static string MindName(Brain brain)
         {
@@ -859,9 +911,9 @@ namespace CapriDesktop
         private readonly Crew crew;
         private readonly ListBox list = new ListBox();
         private readonly TextBox details = new TextBox();
-        private readonly Button stop = new Button(), open = new Button(), clear = new Button(), saveOverseer = new Button(), saveModel = new Button();
-        private readonly TextBox overseer = new TextBox(), model = new TextBox();
-        private readonly Label overseerLabel = new Label(), modelLabel = new Label(), status = new Label();
+        private readonly Button stop = new Button(), open = new Button(), clear = new Button(), saveOverseer = new Button(), saveModel = new Button(), saveKaggle = new Button();
+        private readonly TextBox overseer = new TextBox(), model = new TextBox(), kaggle = new TextBox();
+        private readonly Label overseerLabel = new Label(), modelLabel = new Label(), kaggleLabel = new Label(), status = new Label();
         internal Action<string> SaveOverseer;
         internal Action<string> SaveModel;
         internal Func<string> OverseerTail;
@@ -876,8 +928,8 @@ namespace CapriDesktop
             BackColor = Back;
             ForeColor = Ink;
             Font = new Font("Consolas", 9.5f);
-            ClientSize = new Size(820, 560);
-            MinimumSize = new Size(640, 420);
+            ClientSize = new Size(820, 620);
+            MinimumSize = new Size(640, 480);
             StartPosition = FormStartPosition.CenterScreen;
 
             list.BackColor = Panel; list.ForeColor = Ink; list.BorderStyle = BorderStyle.None; list.IntegralHeight = false;
@@ -886,11 +938,11 @@ namespace CapriDesktop
             list.SelectedIndexChanged += delegate { Display(Selected); };
             details.Multiline = true; details.ReadOnly = true; details.ScrollBars = ScrollBars.Vertical; details.WordWrap = true;
             details.BackColor = Panel; details.ForeColor = Ink; details.BorderStyle = BorderStyle.None;
-            foreach (Button b in new[] { stop, open, clear, saveOverseer, saveModel })
+            foreach (Button b in new[] { stop, open, clear, saveOverseer, saveModel, saveKaggle })
             {
                 b.FlatStyle = FlatStyle.Flat; b.FlatAppearance.BorderColor = Color.FromArgb(60, 64, 78); b.BackColor = Panel; b.ForeColor = Ink;
             }
-            stop.Text = "Stop job"; open.Text = "Open folder"; clear.Text = "Clear finished"; saveOverseer.Text = "Save"; saveModel.Text = "Save";
+            stop.Text = "Stop job"; open.Text = "Open folder"; clear.Text = "Clear finished"; saveOverseer.Text = "Save"; saveModel.Text = "Save"; saveKaggle.Text = "Save";
             stop.Click += delegate { Gig g = Selected; if (g != null && !g.Finished) crew.Stop(g); };
             open.Click += delegate { Gig g = Selected; string folder = g != null ? g.Folder : crew.Home; try { Directory.CreateDirectory(folder); Process.Start("explorer.exe", "\"" + folder + "\""); } catch (Exception) { } };
             clear.Click += delegate { crew.Clear(); };
@@ -902,8 +954,11 @@ namespace CapriDesktop
             modelLabel.ForeColor = Dim; modelLabel.AutoSize = false;
             model.BackColor = Panel; model.ForeColor = Ink; model.BorderStyle = BorderStyle.FixedSingle;
             saveModel.Click += delegate { Action<string> save = SaveModel; if (save != null) save(model.Text.Trim()); };
+            kaggleLabel.ForeColor = Dim; kaggleLabel.AutoSize = false;
+            kaggle.BackColor = Panel; kaggle.ForeColor = Ink; kaggle.BorderStyle = BorderStyle.FixedSingle; kaggle.UseSystemPasswordChar = true;
+            saveKaggle.Click += delegate { string said = Crew.SaveKaggle(kaggle.Text); kaggle.Text = ""; Reload(); kaggleLabel.Text = said; };
             status.ForeColor = Dim; status.AutoSize = false;
-            Controls.AddRange(new Control[] { list, details, stop, open, clear, overseerLabel, overseer, saveOverseer, modelLabel, model, saveModel, status });
+            Controls.AddRange(new Control[] { list, details, stop, open, clear, overseerLabel, overseer, saveOverseer, modelLabel, model, saveModel, kaggleLabel, kaggle, saveKaggle, status });
             Resize += delegate { Arrange(); };
             Arrange();
             Reload();
@@ -913,7 +968,7 @@ namespace CapriDesktop
 
         private void Arrange()
         {
-            int w = ClientSize.Width, h = ClientSize.Height, pad = 12, bottom = 132;
+            int w = ClientSize.Width, h = ClientSize.Height, pad = 12, bottom = 188;
             int listW = Math.Max(240, w * 2 / 5);
             list.Bounds = new Rectangle(pad, pad, listW, h - bottom - pad * 2 - 34);
             details.Bounds = new Rectangle(pad * 2 + listW, pad, w - listW - pad * 3, h - bottom - pad * 2 - 34);
@@ -928,6 +983,9 @@ namespace CapriDesktop
             modelLabel.Bounds = new Rectangle(pad, h - bottom + 72, w - pad * 2, 18);
             model.Bounds = new Rectangle(pad, h - bottom + 94, w - pad * 2 - 80, 24);
             saveModel.Bounds = new Rectangle(w - pad - 72, h - bottom + 92, 72, 28);
+            kaggleLabel.Bounds = new Rectangle(pad, h - bottom + 128, w - pad * 2, 18);
+            kaggle.Bounds = new Rectangle(pad, h - bottom + 150, w - pad * 2 - 80, 24);
+            saveKaggle.Bounds = new Rectangle(w - pad - 72, h - bottom + 148, 72, 28);
         }
 
         private Gig Selected { get { return list.SelectedItem as Gig; } }
@@ -951,6 +1009,7 @@ namespace CapriDesktop
             string t = tail == null ? null : tail();
             overseer.Text = "";
             overseerLabel.Text = "Overseer brain (optional): paste a server link, then a space and its key - like your Kaggle DeepSeek tunnel. " + (string.IsNullOrEmpty(t) ? "Blank = her own brain checks the work." : "Saved: " + t + ". Save it empty to go back to her own brain.");
+            kaggleLabel.Text = Crew.KaggleReady ? "Kaggle: key saved, so her Kaggle worker is signed in. Paste a new token here to replace it." : "Kaggle API token: get one at kaggle.com/settings/api (Generate New Token) and paste it here, so her Kaggle worker can run your notebooks.";
             int running = all.FindAll(g => !g.Finished).Count;
             status.Text = running == 0 ? "Nothing running." + (Crew.HasOpenCode ? " OpenCode: found." : " OpenCode: not found on PATH.") : running + " running." + (Crew.HasOpenCode ? " OpenCode: found." : "");
         }

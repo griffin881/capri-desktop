@@ -115,7 +115,7 @@ namespace CapriDesktop
     internal sealed class Agent : IDisposable
     {
         internal const double Pace = 15;
-        internal const int Version = 17;
+        internal const int Version = 18;
         private const string Patience = "\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45}";
         internal event Action<int> Opened;
         internal event Action<string> Heard;
@@ -158,6 +158,9 @@ namespace CapriDesktop
         private static string Brains(string key) { return "\"prompt\":{\"prompt\":" + Voice.Quote(Prompt) + ",\"llm\":" + Voice.Quote(Mind(key)) + ",\"tool_ids\":" + ToolIds(key) + "}"; }
 
         internal const string OldMind = "gemini-2.5-flash";
+
+        // Sent as a turn of its own when she claims a job on a call and none of her tools ran.
+        internal const string Unkept = "(Capri's hands: you just said you did that, but none of your tools ran, so nothing happened yet. Do it now with the right tool, or tell them straight that it didn't happen. Don't mention this note.)";
 
         // Calls run on a brain ElevenLabs hosts. She takes the newest Claude Sonnet it offers (it plays a character best and knows recent news),
         // then the newest Gemini Flash, then GPT, and falls back to the old Gemini if the list can't be read.
