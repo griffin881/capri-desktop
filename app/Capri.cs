@@ -6747,13 +6747,13 @@ namespace CapriDesktop
                             Play(idle);
                             if (!cornered) throw new Exception("She can't sit in the bottom corner: " + perched + " in " + corner);
                             checks.Add("PASS screen bounds: her body, not her see-through window, stays on screen, so she stands and sits right in the corners");
-                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[4]).DropDownItems[0]).PerformClick();
+                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[5]).DropDownItems[0]).PerformClick();
                             if (Width != 242) throw new Exception("Small size failed.");
-                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[4]).DropDownItems[1]).PerformClick();
+                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[5]).DropDownItems[1]).PerformClick();
                             checks.Add("PASS size menu");
                             string[] tops = new string[menu.Items.Count];
                             for (int i = 0; i < tops.Length; i++) tops[i] = menu.Items[i].Text;
-                            if (string.Join(",", tops) != "CAPRI  /  " + Assembly.GetExecutingAssembly().GetName().Version.ToString(3) + ",,Open Capri Mainframe,Hide Capri,Size,Move,Help,,Quit Capri") throw new Exception("The right-click menu is not the short one: " + string.Join(",", tops));
+                            if (string.Join(",", tops) != "CAPRI  /  " + Assembly.GetExecutingAssembly().GetName().Version.ToString(3) + ",,Open Capri Mainframe,Hide Capri,\"Hey Capri\": on,Size,Move,Help,,Quit Capri") throw new Exception("The right-click menu is not the short one: " + string.Join(",", tops));
                             bool hiddenWas = hidden, popsWere = preferences.CheckIns;
                             Point popFrom = anchor;
                             Ledge popSeat = seat;
