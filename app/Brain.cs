@@ -222,11 +222,37 @@ namespace CapriDesktop
         internal volatile string Model;
         internal Cloud(string key, string model) { Key = key; Kind = KindOf(key); Model = model; }
         internal bool Claude { get { return Kind == "anthropic"; } }
-        internal string Name { get { return Kind == "anthropic" ? "Claude" : Kind == "deepseek" ? "DeepSeek" : Kind == "nvidia" ? "NVIDIA" : "ChatGPT"; } }
-        internal string Company { get { return Kind == "anthropic" ? "Anthropic" : Kind == "deepseek" ? "DeepSeek" : Kind == "nvidia" ? "NVIDIA" : "OpenAI"; } }
+        internal string Name { get { return Kind == "anthropic" ? "Claude" : Kind == "deepseek" ? "DeepSeek" : Kind == "nvidia" ? "NVIDIA" : Kind == "custom" ? "Your server" : "ChatGPT"; } }
+        internal string Company { get { return Kind == "anthropic" ? "Anthropic" : Kind == "deepseek" ? "DeepSeek" : Kind == "nvidia" ? "NVIDIA" : Kind == "custom" ? HostOf(Key) : "OpenAI"; } }
+
+        // Your own server: an address like http://127.0.0.1:8080/v1 or a tunnel link, optionally followed by a space and its key.
+        // Anything that talks the OpenAI chat format works: llama.cpp's server, LM Studio, Ollama's /v1, vLLM, the Kaggle DeepSeek link.
+        internal static bool IsAddress(string key) { return key.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || key.StartsWith("https://", StringComparison.OrdinalIgnoreCase); }
+
+        internal static string BaseOf(string key)
+        {
+            string address = key.Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)[0].TrimEnd('/');
+            if (address.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)) address = address.Substring(0, address.Length - "/chat/completions".Length);
+            if (address.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)) address = address.Substring(0, address.Length - 3);
+            return address.TrimEnd('/');
+        }
+
+        internal static string TokenOf(string key)
+        {
+            if (!IsAddress(key)) return key;
+            string[] parts = key.Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length > 1 ? parts[1] : "none";
+        }
+
+        internal static string HostOf(string key)
+        {
+            Uri uri;
+            return Uri.TryCreate(BaseOf(key), UriKind.Absolute, out uri) ? uri.Host : "your server";
+        }
 
         internal static string KindOf(string key)
         {
+            if (IsAddress(key)) return "custom";
             if (key.StartsWith("sk-ant-", StringComparison.Ordinal)) return "anthropic";
             if (key.StartsWith("nvapi-", StringComparison.Ordinal)) return "nvidia";
             if (Regex.IsMatch(key, "^sk-[0-9a-f]{32}$")) return "deepseek";
@@ -598,7 +624,7 @@ namespace CapriDesktop
         {
             string kind = Cloud.KindOf(key);
             bool claude = kind == "anthropic";
-            HttpWebRequest request = Create(Address(kind, "/models") + (claude ? "?limit=100" : ""), 30000);
+            HttpWebRequest request = Create(Address(kind, "/models", key) + (claude ? "?limit=100" : ""), 30000);
             Sign(request, key, claude);
             CloudModelPage page;
             try
@@ -640,8 +666,9 @@ namespace CapriDesktop
             return true;
         }
 
-        private static string Address(string kind, string path)
+        private static string Address(string kind, string path, string key = null)
         {
+            if (kind == "custom") return Cloud.BaseOf(key) + "/v1" + path;
             if (kind == "anthropic") return Anthropic + "/v1" + path;
             if (kind == "deepseek") return DeepSeek + path;
             if (kind == "nvidia") return Nvidia + "/v1" + path;
@@ -666,6 +693,7 @@ namespace CapriDesktop
             if (models == null || models.Count == 0) return null;
             if (kind == "anthropic") return models.Contains("claude-opus-5-5") ? "claude-opus-5-5" : models[0];
             if (kind == "deepseek") return models.Contains("deepseek-flash") ? "deepseek-flash" : models[0];
+            if (kind == "custom") return models[0];
             if (kind == "nvidia") { foreach (string id in NvidiaPicks) if (models.Contains(id)) return id; return models[0]; }
             foreach (string id in models) if (id.StartsWith("gpt-", StringComparison.Ordinal) && id.EndsWith("-mini", StringComparison.Ordinal)) return id;
             return models[0];
@@ -673,7 +701,7 @@ namespace CapriDesktop
 
         private static void Sign(HttpWebRequest request, string key, bool claude)
         {
-            if (!claude) { request.Headers["Authorization"] = "Bearer " + key; return; }
+            if (!claude) { request.Headers["Authorization"] = "Bearer " + Cloud.TokenOf(key); return; }
             request.Headers["x-api-key"] = key;
             request.Headers["anthropic-version"] = "2026-10-21";
         }
@@ -916,9 +944,9 @@ namespace CapriDesktop
                     Tokens = openAi ? (int?)null : brief ? Math.Max(256, limit) : 2000,
                     Effort = effort,
                     Thinking = remote.Kind == "deepseek" ? new CloudThinking() : null,
-                    Template = brief ? new CloudTemplate() : null
+                    Template = brief || remote.Kind == "custom" ? new CloudTemplate() : null
                 };
-                string address = Address(remote.Kind, "/chat/completions");
+                string address = Address(remote.Kind, "/chat/completions", remote.Key);
                 Action<HttpWebRequest> sign = delegate(HttpWebRequest request) { Sign(request, remote.Key, false); };
                 try { return Read(Send<CompletionReply>(address, body, CloudWait, listed, sign, parts, ticket), calls); }
                 catch (BrainException error)

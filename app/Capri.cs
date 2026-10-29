@@ -3814,7 +3814,7 @@ namespace CapriDesktop
         internal void ConnectText(string key)
         {
             key = (key ?? "").Trim();
-            if (Cloud.KindOf(key) == null) { mainframe.ShowProblem("That isn't an NVIDIA, OpenAI, Claude or DeepSeek key."); return; }
+            if (Cloud.KindOf(key) == null) { mainframe.ShowProblem("Paste an API key, or your own server's address (http://...)."); return; }
             ListCloud(key, true);
         }
 
