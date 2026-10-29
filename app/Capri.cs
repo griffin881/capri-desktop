@@ -1123,9 +1123,11 @@ namespace CapriDesktop
         private void StartWakeWord()
         {
             if (wakeWord != null) return;
-            WakeWord listening = new WakeWord();
+            WakeWord listening = new WakeWord(parakeet, preferences.Mic);
+            listening.Busy = delegate { return chatting || speaker.Busy; };
             listening.Heard += delegate { Post(delegate { OnWakeWord(); }); };
-            listening.Failed += delegate(string why) { Post(delegate { mainframe.VoiceNote(why, true); }); };
+            listening.Started += delegate(string note) { Post(delegate { mainframe.VoiceNote(note, false); }); };
+            listening.Failed += delegate(string why) { Post(delegate { mainframe.VoiceNote(why, true); if (!hidden && !chatting) EarsNote(why, true); }); };
             wakeWord = listening;
             ThreadPool.QueueUserWorkItem(delegate { listening.Start(); });
         }
@@ -3937,6 +3939,7 @@ namespace CapriDesktop
             preferences.Mic = string.IsNullOrEmpty(id) ? null : id;
             ears.Chosen = preferences.Mic;
             SavePreferences();
+            if (wakeWord != null) { StopWakeWord(); StartWakeWord(); }
             mainframe.ShowMic(MicName(preferences.Mic));
             micHeard = micWarned = false;
             micQuietFrom = -1;
@@ -4054,6 +4057,8 @@ namespace CapriDesktop
                     earsFailures = 0;
                     // Her language changed while they downloaded, so she gets the ones it needs.
                     if (!parakeet.Installed) { GetFreeEars(); return; }
+                    // "Hey Capri" moves over to her own ears.
+                    if (wakeWord != null) { StopWakeWord(); StartWakeWord(); }
                     if (EarsArrived()) return;
                     if (chatting && local) mainframe.VoiceNote("Her own ears are in.", false);
                 });
