@@ -610,6 +610,13 @@ namespace CapriDesktop
         private WakeWord wakeWord;
         private ToolStripMenuItem wakeItem;
         private Crew crew;
+        // A call is her voice chat: she listens, answers, listens again, until they hang up, say bye or go quiet for a few minutes.
+        // When she speaks first, a short reply window opens so they can just answer.
+        private ToolStripMenuItem callItem;
+        private bool replyWindow, replyPending;
+        private double replyFrom = -1, callHeardAt = -1;
+        private const double ReplyListen = 9, CallQuiet = 180;
+        private static readonly string[] Byes = { "Later, choom.", "Catch you later.", "I'll be around.", "Go on then. I'll be here.", "Bye for now." };
         private CrewWindow crewWindow;
         private readonly System.Collections.Generic.Queue<string> crewLines = new System.Collections.Generic.Queue<string>();
         private double crewQuietSince = -1;
@@ -908,6 +915,8 @@ namespace CapriDesktop
             wakeItem = new ToolStripMenuItem(WakeLabel(), null, delegate { ToggleWakeWord(); });
             menu.Items.Add(wakeItem);
             menu.Items.Add(new ToolStripMenuItem("Jobs", null, delegate { ShowCrew(); }));
+            callItem = new ToolStripMenuItem("Call Capri", null, delegate { if (hidden) SetHidden(false); replyWindow = false; ToggleChat(); });
+            menu.Items.Add(callItem);
             ToolStripMenuItem sizes = new ToolStripMenuItem("Size");
             AddSize(sizes, "Small", 170);
             AddSize(sizes, "Medium", 240);
@@ -1115,6 +1124,7 @@ namespace CapriDesktop
             UpdateLife(now);
             PumpCrew(now);
             MaybeDigest(now);
+            WatchCall(now);
             RenderFrame();
             if (!riding && !dragging && !walking && outro == null && !preferences.Motion && clip == idle && speech == null && talkState == TalkState.Off) frames.Stop();
         }
@@ -1224,6 +1234,50 @@ namespace CapriDesktop
             });
         }
 
+        private bool CanReply { get { return FreeChatOn && (preferences.Quiet || preferences.Silent || voice.Key == null); } }
+
+        private void WatchCall(double now)
+        {
+            string label = chatting ? "Hang up" : "Call Capri";
+            if (callItem != null && callItem.Text != label) callItem.Text = label;
+            if (testing) return;
+            bool free = (talkState == TalkState.Off || talkState == TalkState.Dormant) && now >= voiceUntil;
+            if (replyPending && free && !chatting && !hidden && !dragging && CanReply)
+            {
+                replyPending = false;
+                StartLocal();
+                replyWindow = true;
+                replyFrom = now;
+                callHeardAt = now;
+                return;
+            }
+            if (!chatting || !local) { replyWindow = false; callHeardAt = -1; return; }
+            if (callHeardAt < 0) callHeardAt = now;
+            bool speaking;
+            lock (waking) speaking = utterance != null;
+            if (speaking || transcribing || talkState == TalkState.Thinking || talkState == TalkState.Talking || now < voiceUntil)
+            {
+                callHeardAt = now;
+                if (speaking || transcribing) replyWindow = false;
+                return;
+            }
+            // Nobody answered her: the window closes quietly.
+            if (replyWindow && now - replyFrom > ReplyListen) { replyWindow = false; StopChat(true); return; }
+            if (!replyWindow && now - callHeardAt > CallQuiet) { StopChat(true); mainframe.VoiceNote("Hung up after a few quiet minutes.", false); }
+        }
+
+        // "Bye", "hang up", "that's all": the call ends with a goodbye.
+        private static readonly Regex Goodbye = new Regex(@"^\W*((ok(ay)?|alright|alr|aight|cool|thanks|thank you)[,\s]+)*(bye( bye)?|goodbye|good ?night|gn|hang up|end (the |this )?call|i'?m done( for now)?|that'?s all( for now)?|talk (to you )?later|ttyl|see (ya|you)( later)?|later|peace( out)?)([,\s]+(capri|choom))?\W*$", RegexOptions.IgnoreCase);
+
+        private bool HungUp(string text)
+        {
+            if (!Goodbye.IsMatch(text ?? "")) return false;
+            replyWindow = false;
+            StopChat(true);
+            Tell("bye", Byes[random.Next(Byes.Length)]);
+            return true;
+        }
+
         // Her crew's plans and reports come out of her mouth, once she's free and has had a breath.
         private void PumpCrew(double now)
         {
@@ -1240,6 +1294,7 @@ namespace CapriDesktop
             int ticket = ++asking;
             Answer(ticket, line, TalkState.Talking);
             brain.Remember("(your crew reported in)", line);
+            replyPending = true;
         }
 
         // She heard her name: glitch awake and open voice chat.
@@ -1952,6 +2007,7 @@ namespace CapriDesktop
                 DropSoon();
                 if (IsHandleCreated) Native.SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
                 Say(line);
+                replyPending = true;
                 popOut = wasHidden || !preferences.OnTop ? clock.Elapsed.TotalSeconds + 6 : -1;
                 popClicks = clicks;
                 popHide = wasHidden;
@@ -3172,6 +3228,7 @@ namespace CapriDesktop
             glanced.Add(Tuple.Create(clock.Elapsed.TotalSeconds, said));
             brain.Remember("(You glanced at their screen.)", said);
             Tell("watching", said);
+            replyPending = true;
         }
 
         private System.Collections.Generic.List<string> RecentGlances(double now)
@@ -4596,9 +4653,9 @@ namespace CapriDesktop
                 }
                 utterance.Add(chunk);
                 quietRun = loud ? 0 : quietRun + 1;
-                if (quietRun < 9 && utterance.Count < 150) return;
+                if (quietRun < 7 && utterance.Count < 150) return;
                 short[][] taken = utterance.ToArray();
-                bool capped = quietRun < 9;
+                bool capped = quietRun < 7;
                 utterance = null;
                 quietRun = 0;
                 int ticket = chatTicket;
@@ -4671,6 +4728,7 @@ namespace CapriDesktop
                 return;
             }
             if (string.IsNullOrEmpty(text)) { Missed("I couldn't make out any words. Try again closer to the mic.", false); return; }
+            if (HungUp(text)) return;
             mainframe.VoiceNote("Free voice chat on. Talk and I'll type back.", false);
             Hear(text, text, "> you: ");
         }
@@ -4947,7 +5005,7 @@ namespace CapriDesktop
             Say(null);
         }
 
-        private void StopChat()
+        private void StopChat(bool keepEars = false)
         {
             if (!chatting) return;
             bool wasLocal = local;
@@ -4969,7 +5027,8 @@ namespace CapriDesktop
             ears.Stop();
             ears.Muted = false;
             Hearing.Own = null;
-            if (!testing) ThreadPool.QueueUserWorkItem(delegate { parakeet.Dispose(); });
+            // "Hey Capri" and reply windows use her ears again soon, so they stay loaded rather than reloading every time.
+            if (!testing && !keepEars && wakeWord == null) ThreadPool.QueueUserWorkItem(delegate { parakeet.Dispose(); });
             speaker.Clear();
             dropping = false;
             checkedIn = false;
@@ -6855,13 +6914,13 @@ namespace CapriDesktop
                             Play(idle);
                             if (!cornered) throw new Exception("She can't sit in the bottom corner: " + perched + " in " + corner);
                             checks.Add("PASS screen bounds: her body, not her see-through window, stays on screen, so she stands and sits right in the corners");
-                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[6]).DropDownItems[0]).PerformClick();
+                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[7]).DropDownItems[0]).PerformClick();
                             if (Width != 242) throw new Exception("Small size failed.");
-                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[6]).DropDownItems[1]).PerformClick();
+                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[7]).DropDownItems[1]).PerformClick();
                             checks.Add("PASS size menu");
                             string[] tops = new string[menu.Items.Count];
                             for (int i = 0; i < tops.Length; i++) tops[i] = menu.Items[i].Text;
-                            if (string.Join(",", tops) != "CAPRI  /  " + Assembly.GetExecutingAssembly().GetName().Version.ToString(3) + ",,Open Capri Mainframe,Hide Capri,\"Hey Capri\": on,Jobs,Size,Move,Help,,Quit Capri") throw new Exception("The right-click menu is not the short one: " + string.Join(",", tops));
+                            if (string.Join(",", tops) != "CAPRI  /  " + Assembly.GetExecutingAssembly().GetName().Version.ToString(3) + ",,Open Capri Mainframe,Hide Capri,\"Hey Capri\": on,Jobs,Call Capri,Size,Move,Help,,Quit Capri") throw new Exception("The right-click menu is not the short one: " + string.Join(",", tops));
                             bool hiddenWas = hidden, popsWere = preferences.CheckIns;
                             Point popFrom = anchor;
                             Ledge popSeat = seat;
