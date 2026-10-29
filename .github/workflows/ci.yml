@@ -47,6 +47,34 @@ jobs:
             exit 1
           }
 
+  release:
+    needs: windows
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: Capri-Setup
+          path: dist
+      - name: Publish the release her updater installs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/.*AssemblyVersion("\([0-9.]*\)").*/\1/p' app/AssemblyInfo.cs)
+          tag="v$version"
+          notes=$(git log -1 --format=%s -- app/AssemblyInfo.cs)
+          if gh release view "$tag" >/dev/null 2>&1; then echo "$tag is already released"; exit 0; fi
+          cd dist
+          mv Capri-Setup.exe "Capri-Setup-$version.exe"
+          sha256sum "Capri-Setup-$version.exe" > SHA256SUMS.txt
+          gh release create "$tag" "Capri-Setup-$version.exe" SHA256SUMS.txt --title "Capri $version" --notes "$notes" --target "$GITHUB_SHA"
+
   linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
