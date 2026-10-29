@@ -1213,7 +1213,8 @@ namespace CapriDesktop
             if (testing || digesting || now < digestCheck) return;
             digestCheck = now + 45;
             if (talkState != TalkState.Off && talkState != TalkState.Dormant) { lastHeardAt = now; return; }
-            if (brain.Model == null || now - lastHeardAt < 420) return;
+            // A brain on this PC can pin a laptop's CPU, so her diary only writes itself with a cloud brain.
+            if (brain.Model == null || brain.Remote == null || now - lastHeardAt < 420) return;
             digesting = true;
             ThreadPool.QueueUserWorkItem(delegate
             {

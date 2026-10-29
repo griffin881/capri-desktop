@@ -20,8 +20,11 @@ namespace CapriDesktop
         internal Func<bool> Busy;
         internal float Threshold = 0.45f;
 
+        // Her name takes about a second to say, usually after a pause. Only bursts like that get a listen from her ears;
+        // anything continuous (talk, an audiobook, music) is skipped, checks are rate-limited, and they run at low priority.
         private const double Loud = 0.02;
-        private const int StartRun = 2, EndQuiet = 6, LongestChunks = 45, Preroll = 4;
+        private const int StartRun = 2, EndQuiet = 4, MinChunks = 3, MaxChunks = 20, Preroll = 3, PerMinute = 10;
+        private const double PauseBefore = 0.5, Spacing = 1.2, Rest = 45;
         private static readonly string[] Phrases = { "hey capri", "hi capri", "okay capri", "ok capri", "yo capri", "capri wake up" };
         private static readonly Regex Name = new Regex(@"\b(c|k)a+h?p+(r|l)(i|ee|ie|y|e|ey)\b|\bcapri\w*", RegexOptions.IgnoreCase);
         private static readonly Regex Greeting = new Regex(@"^\W*(hey|hi|hay|okay|ok|yo|a|ay|eh)\b", RegexOptions.IgnoreCase);
@@ -34,11 +37,14 @@ namespace CapriDesktop
         private SpeechRecognitionEngine engine;
         private Timer silenceCheck;
         private readonly List<short[]> preroll = new List<short[]>();
-        private List<short[]> utterance;
+        private List<short[]> utterance, pending;
         private int loudRun, quietRun;
         private volatile bool hearing;
-        private double lastHeard = -10, loudest;
+        private double lastHeard = -10, loudest, floor = 0.006, lastLoud = -10, burstGap = 10, lastCheck = -10, restUntil = -1;
+        private readonly Queue<double> checks = new Queue<double>();
         private bool disposed, skipping;
+        private Thread worker;
+        private AutoResetEvent signal;
 
         internal WakeWord(LocalEars parakeet, string mic)
         {
@@ -67,7 +73,13 @@ namespace CapriDesktop
 
         private void StartOwn()
         {
-            parakeet.Warm();
+            // Her ears load the first time something sounds like her name, not before.
+            signal = new AutoResetEvent(false);
+            worker = new Thread(Listen);
+            worker.IsBackground = true;
+            worker.Priority = ThreadPriority.BelowNormal;
+            worker.Name = "Capri wake word";
+            worker.Start();
             Ears opened = new Ears();
             opened.Chosen = mic;
             opened.Heard += Gather;
@@ -75,6 +87,19 @@ namespace CapriDesktop
             ears = opened;
             Log("listening with her own ears on " + (string.IsNullOrEmpty(mic) ? "the default mic" : "the mic picked under VOICE"));
             Announce("Listening for \"Hey Capri\".");
+        }
+
+        private void Listen()
+        {
+            while (true)
+            {
+                AutoResetEvent wake = signal;
+                if (disposed || wake == null) return;
+                wake.WaitOne(1000);
+                List<short[]> taken;
+                lock (preroll) { taken = pending; pending = null; }
+                if (taken != null) Check(taken);
+            }
         }
 
         private void StartWindows()
@@ -98,20 +123,24 @@ namespace CapriDesktop
             Announce("Listening for \"Hey Capri\" (Windows speech, default mic).");
         }
 
-        // Her own ears: catch a short burst of speech, then hear it.
+        // Her own ears: catch a short burst that came after a pause, then hear it.
         private void Gather(short[] chunk)
         {
             double level = Speaker.Loudness(chunk, 0, chunk.Length);
             if (level > loudest) loudest = level;
-            bool loud = level >= Loud;
+            double now = clock.Elapsed.TotalSeconds;
+            bool loud = level >= Math.Max(Loud, floor * 3);
+            // A fan or hum raises the bar for what counts as someone talking.
+            if (!loud && utterance == null) floor = floor * 0.97 + Math.Min(level, 0.05) * 0.03;
+            if (loud) { if (loudRun == 0 && utterance == null) burstGap = now - lastLoud; lastLoud = now; }
             Func<bool> busy = Busy;
             lock (preroll)
             {
-                if (hearing || (busy != null && busy())) { utterance = null; preroll.Clear(); loudRun = quietRun = 0; skipping = false; return; }
+                if (hearing || pending != null || (busy != null && busy())) { utterance = null; preroll.Clear(); loudRun = quietRun = 0; skipping = false; return; }
                 if (skipping)
                 {
                     quietRun = loud ? 0 : quietRun + 1;
-                    if (quietRun >= EndQuiet) { skipping = false; quietRun = 0; }
+                    if (quietRun >= EndQuiet + 1) { skipping = false; quietRun = 0; }
                     return;
                 }
                 if (utterance == null)
@@ -120,21 +149,30 @@ namespace CapriDesktop
                     if (preroll.Count > Preroll) preroll.RemoveAt(0);
                     loudRun = loud ? loudRun + 1 : 0;
                     if (loudRun < StartRun) return;
+                    loudRun = quietRun = 0;
+                    // Talk that picks up without a pause is the middle of a conversation, not someone calling her.
+                    if (burstGap < PauseBefore) { skipping = true; preroll.Clear(); return; }
                     utterance = new List<short[]>(preroll);
                     preroll.Clear();
-                    loudRun = quietRun = 0;
                     return;
                 }
                 utterance.Add(chunk);
                 quietRun = loud ? 0 : quietRun + 1;
-                // Long talk, music or TV isn't someone calling her name: skip to the next pause.
-                if (utterance.Count >= LongestChunks) { utterance = null; skipping = true; quietRun = 0; return; }
+                if (utterance.Count >= MaxChunks + EndQuiet) { utterance = null; skipping = true; quietRun = 0; return; }
                 if (quietRun < EndQuiet) return;
                 List<short[]> taken = utterance;
                 utterance = null;
                 quietRun = 0;
+                if (taken.Count - EndQuiet < MinChunks) return;
+                if (now < restUntil || now - lastCheck < Spacing) return;
+                while (checks.Count > 0 && now - checks.Peek() > 60) checks.Dequeue();
+                if (checks.Count >= PerMinute) { restUntil = now + Rest; Log("lots of talking nearby, so \"Hey Capri\" rests for " + (int)Rest + " seconds"); return; }
+                checks.Enqueue(now);
+                lastCheck = now;
                 hearing = true;
-                ThreadPool.QueueUserWorkItem(delegate { Check(taken); });
+                pending = taken;
+                AutoResetEvent wake = signal;
+                if (wake != null) wake.Set();
             }
         }
 
@@ -203,6 +241,10 @@ namespace CapriDesktop
 
         private void Shut()
         {
+            AutoResetEvent wake = signal;
+            signal = null;
+            if (wake != null) { try { wake.Set(); } catch (ObjectDisposedException) { } }
+            worker = null;
             Timer timer = silenceCheck;
             silenceCheck = null;
             if (timer != null) timer.Dispose();
