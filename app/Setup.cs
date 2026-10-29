@@ -127,7 +127,8 @@ namespace CapriSetup
                 if (File.Exists(target)) File.Replace(temporary, target, null); else File.Move(temporary, target);
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
-            File.Copy(Application.ExecutablePath, Path.Combine(destination, "Uninstall.exe"), true);
+            string uninstaller = Path.Combine(destination, "Uninstall.exe");
+            if (!string.Equals(Path.GetFullPath(Application.ExecutablePath), Path.GetFullPath(uninstaller), StringComparison.OrdinalIgnoreCase)) PlaceUninstaller(uninstaller);
             string menu = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Capri.lnk");
             Shortcut(menu, Path.Combine(destination, "Capri.exe"));
             if (desktop) Shortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Capri.lnk"), Path.Combine(destination, "Capri.exe"));
@@ -142,6 +143,51 @@ namespace CapriSetup
                 key.SetValue("NoModify", 1, RegistryValueKind.DWord);
                 key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
                 key.SetValue("EstimatedSize", (Payload().Length + new FileInfo(Application.ExecutablePath).Length) / 1024, RegistryValueKind.DWord);
+            }
+        }
+
+        // The old Uninstall.exe can be open, read-only, or held by antivirus for a moment, which makes copying over it
+        // "access denied". Clear the flag, close an open copy of it, wait a beat, and as a last resort move it aside.
+        private static void PlaceUninstaller(string uninstaller)
+        {
+            string folder = Path.GetDirectoryName(uninstaller);
+            foreach (string leftover in Directory.GetFiles(folder, "Uninstall.old-*.exe")) { try { File.Delete(leftover); } catch (Exception) { } }
+            Exception last = null;
+            for (int attempt = 0; attempt < 6; attempt++)
+            {
+                try
+                {
+                    if (File.Exists(uninstaller)) File.SetAttributes(uninstaller, FileAttributes.Normal);
+                    File.Copy(Application.ExecutablePath, uninstaller, true);
+                    return;
+                }
+                catch (UnauthorizedAccessException error) { last = error; }
+                catch (IOException error) { last = error; }
+                if (attempt == 0) CloseCopiesOf(uninstaller);
+                if (attempt == 2) { try { File.Move(uninstaller, Path.Combine(folder, "Uninstall.old-" + DateTime.Now.Ticks + ".exe")); } catch (Exception) { } }
+                System.Threading.Thread.Sleep(500);
+            }
+            throw new IOException("Windows won't let setup replace " + uninstaller + ". Restart your PC, then run setup again. (" + last.Message + ")");
+        }
+
+        private static void CloseCopiesOf(string file)
+        {
+            int self;
+            using (Process me = Process.GetCurrentProcess()) self = me.Id;
+            foreach (Process process in Process.GetProcesses())
+            {
+                using (process)
+                {
+                    try
+                    {
+                        if (process.Id == self || !string.Equals(process.MainModule.FileName, file, StringComparison.OrdinalIgnoreCase)) continue;
+                        process.Kill();
+                        process.WaitForExit(3000);
+                    }
+                    catch (System.ComponentModel.Win32Exception) { }
+                    catch (InvalidOperationException) { }
+                    catch (NotSupportedException) { }
+                }
             }
         }
 
