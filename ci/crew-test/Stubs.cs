@@ -1,4 +1,4 @@
-// Stand-ins for the parts of Capri her crew talks to, so the crew can be tested on its own.
+// Stand-ins for the parts of Capri her crew and memory talk to, so they can be tested on their own.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -30,6 +30,7 @@ namespace CapriDesktop
     internal static class Safety { internal static string Stops(string s) { return s.Contains("bomb") ? "Not doing that." : null; } }
     internal static class Hands
     {
+        internal static string Hush(string t) { return t; }
         internal static ToolArguments Read(string json)
         {
             try { using (MemoryStream m = new MemoryStream(Encoding.UTF8.GetBytes(json))) return (ToolArguments)new DataContractJsonSerializer(typeof(ToolArguments)).ReadObject(m); }
@@ -43,6 +44,8 @@ namespace CapriDesktop
         internal Queue<string> Consults = new Queue<string>();
         internal Queue<object> Steps = new Queue<object>();
         internal List<string> Seen = new List<string>();
+        internal static List<string> Notes = new List<string>();
+        internal static string Note(string f) { if (Notes.Contains(f)) return "Already"; Notes.Add(f); return "Saved to my notes: " + f; }
         internal static void Log(string a, long b, string c) { Console.WriteLine("LOG " + a + " " + c); }
         internal static string Visible(string t) { return Regex.Replace(t ?? "", "<think>.*?</think>", "", RegexOptions.Singleline).Trim(); }
         internal string Consult(string system, string user, int limit) { Seen.Add("CONSULT " + user); return Consults.Count > 0 ? Consults.Dequeue() : ""; }
