@@ -184,6 +184,8 @@ namespace CapriDesktop
         [DataMember] public bool StartupSet;
         [DataMember] public bool QuickHands;
         [DataMember] public bool Bypass;
+        // "Hey Capri" is on unless turned off, so a missing value means on.
+        [DataMember] public bool NoWake;
 
         [OnDeserializing]
         private void Defaults(StreamingContext context)
@@ -338,7 +340,7 @@ namespace CapriDesktop
             Uri uri;
             if (!Uri.TryCreate(address, UriKind.Absolute, out uri) || uri.UserInfo.Length != 0 || uri.Fragment.Length != 0) throw new BrainException("The update download address is invalid.");
             if (local && uri.IsLoopback && uri.Scheme == Uri.UriSchemeHttp) return uri;
-            if (uri.Scheme != Uri.UriSchemeHttps || !uri.IsDefaultPort || uri.Host != "github.com" || !uri.AbsolutePath.StartsWith("/lachydotmcg/capri-desktop/releases/download/", StringComparison.Ordinal)) throw new BrainException("The update download address is invalid.");
+            if (uri.Scheme != Uri.UriSchemeHttps || !uri.IsDefaultPort || uri.Host != "github.com" || !uri.AbsolutePath.StartsWith("/griffin881/capri-desktop/releases/download/", StringComparison.Ordinal)) throw new BrainException("The update download address is invalid.");
             return uri;
         }
 
@@ -601,6 +603,10 @@ namespace CapriDesktop
         private long pendingTime;
         private bool hotkey;
         private double leanAngle;
+        private Life life;
+        private bool lifeDragged;
+        private WakeWord wakeWord;
+        private ToolStripMenuItem wakeItem;
         private Ledge seat;
         private bool falling;
         private Ledge fallTo;
@@ -879,6 +885,8 @@ namespace CapriDesktop
             menu.Items.Add(new ToolStripMenuItem("Open Capri Mainframe", null, delegate { mainframe.Restore(); }));
             visibilityItem = new ToolStripMenuItem("Hide Capri", null, delegate { SetHidden(!hidden); });
             menu.Items.Add(visibilityItem);
+            wakeItem = new ToolStripMenuItem(WakeLabel(), null, delegate { ToggleWakeWord(); });
+            menu.Items.Add(wakeItem);
             ToolStripMenuItem sizes = new ToolStripMenuItem("Size");
             AddSize(sizes, "Small", 170);
             AddSize(sizes, "Medium", 240);
@@ -1044,6 +1052,7 @@ namespace CapriDesktop
             bool muteFree = !testing && Native.RegisterHotKey(Handle, MuteKeyId, preferences.MuteMods | 0x4000, preferences.MuteVk) && Native.UnregisterHotKey(Handle, MuteKeyId);
             if (!testing) typeKey = Native.RegisterHotKey(Handle, TypeKeyId, preferences.TypeMods | 0x4000, preferences.TypeVk);
             if (!testing) hideKey = Native.RegisterHotKey(Handle, HideKeyId, preferences.HideMods | 0x4000, preferences.HideVk);
+            if (!testing && !preferences.NoWake) StartWakeWord();
             mainframe.Hotkeys(TalkKeyName, MuteKeyName, TypeKeyName, HideKeyName);
             mainframe.ShowShortcut(talkKey, muteFree);
             mainframe.ShowKeys(typeKey, hideKey);
@@ -1082,8 +1091,59 @@ namespace CapriDesktop
             if (riding) FollowCursor(); else if (onPanel) HoldPanel(); else if (falling) Tumble(now); else if (seat != null) HoldSeat(now);
             if (walking) Walk(now);
             if (!riding && !dragging && !walking && !falling && outro == null && clip != arrive && clip != leave) Face();
+            UpdateLife(now);
             RenderFrame();
             if (!riding && !dragging && !walking && outro == null && !preferences.Motion && clip == idle && speech == null && talkState == TalkState.Off) frames.Stop();
+        }
+
+        // While she floats free (nothing under her, nobody holding her) her Life layer keeps her moving.
+        private void UpdateLife(double now)
+        {
+            if (life == null) life = new Life(random);
+            bool held = falling || seat != null || riding || onPanel || hanging || walking;
+            bool free = preferences.Motion && !dragging && !held && !hidden && outro == null && clip == idle;
+            if (dragging) lifeDragged = true;
+            else if (lifeDragged && held) lifeDragged = false;
+            else if (lifeDragged && free) { lifeDragged = false; life.Landed(now); }
+            Point cursor = Cursor.Position;
+            float dx = cursor.X - (anchor.X + Width / 2f), dy = cursor.Y - (anchor.Y + Height / 2f);
+            life.Update(now, free, speech != null || (chatting && speaker.Busy), preferences.Size, dx, dy);
+        }
+
+        private string WakeLabel() { return preferences.NoWake ? "\"Hey Capri\": off" : "\"Hey Capri\": on"; }
+
+        internal void ToggleWakeWord()
+        {
+            preferences.NoWake = !preferences.NoWake;
+            if (preferences.NoWake) StopWakeWord(); else StartWakeWord();
+            wakeItem.Text = WakeLabel();
+            SavePreferences();
+        }
+
+        private void StartWakeWord()
+        {
+            if (wakeWord != null) return;
+            WakeWord listening = new WakeWord();
+            listening.Heard += delegate { Post(delegate { OnWakeWord(); }); };
+            listening.Failed += delegate(string why) { Post(delegate { mainframe.VoiceNote(why, true); }); };
+            wakeWord = listening;
+            ThreadPool.QueueUserWorkItem(delegate { listening.Start(); });
+        }
+
+        private void StopWakeWord()
+        {
+            WakeWord closing = wakeWord;
+            wakeWord = null;
+            if (closing != null) closing.Dispose();
+        }
+
+        // She heard her name: glitch awake and open voice chat.
+        private void OnWakeWord()
+        {
+            if (quitting || IsDisposed || chatting) return;
+            if (hidden) SetHidden(false);
+            if (preferences.Motion && !dragging && !falling && !walking && outro == null && clip != arrive && clip != leave) Play(seat != null || onPanel ? perchGlitch : glitch);
+            ToggleChat();
         }
 
         private void Face()
@@ -1255,7 +1315,7 @@ namespace CapriDesktop
         internal static Release FetchLatestRelease()
         {
             ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create("https://api.github.com/repos/lachydotmcg/capri-desktop/releases/latest");
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create("https://api.github.com/repos/griffin881/capri-desktop/releases/latest");
             request.UserAgent = "Capri-Desktop";
             request.Accept = "application/vnd.github+json";
             request.Timeout = 10000;
@@ -5200,8 +5260,11 @@ namespace CapriDesktop
             bool settled = preferences.Motion && !dragging && clip != dangle && clip != sleep;
             float breathe = settled ? (float)Math.Sin(now * 1.75) * 2.2f : 0;
             float tilt = settled ? (float)Math.Sin(now * 0.95) * 0.65f : 0;
-            graphics.TranslateTransform(Width / 2f, Height / 2f + breathe);
-            graphics.RotateTransform(tilt + (float)leanAngle);
+            Life living = preferences.Motion ? life : null;
+            float liveX = living != null ? living.X : 0, liveY = living != null ? living.Y : 0, liveTilt = living != null ? living.Tilt : 0;
+            graphics.TranslateTransform(Width / 2f + liveX, Height / 2f + breathe + liveY);
+            graphics.RotateTransform(tilt + (float)leanAngle + liveTilt);
+            if (living != null && (Math.Abs(living.ScaleX - 1) > 0.001f || Math.Abs(living.ScaleY - 1) > 0.001f)) graphics.ScaleTransform(living.ScaleX, living.ScaleY);
             if (facingLeft) graphics.ScaleTransform(-1, 1);
             int width = shown.Strip.Width / shown.Count;
             float tall = preferences.Size * shown.Height;
@@ -5209,9 +5272,41 @@ namespace CapriDesktop
             if (shown == walk && walking && preferences.Motion) Wisp(graphics, now, Math.Sign(walkTo - anchor.X) * (facingLeft ? -1 : 1), wide, tall);
             float nod = shown == dance || shown == perchDance ? NodDepth() : 0;
             if (nod > 0.002f) Nod(graphics, shown.Strip, cell, width, wide, tall, nod, shown == perchDance);
-            else graphics.DrawImage(shown.Strip, new RectangleF(-wide / 2f, -tall / 2f, wide, tall), new RectangleF(cell * width, 0, width, shown.Strip.Height), GraphicsUnit.Pixel);
+            else DrawLiving(graphics, shown.Strip, new RectangleF(-wide / 2f, -tall / 2f, wide, tall), new RectangleF(cell * width, 0, width, shown.Strip.Height), living, wide);
             if (talk >= 0) graphics.DrawImage(mouth.Strip, new RectangleF(-wide / 2f, -tall / 2f, wide, tall), new RectangleF(talk * width, 0, width, mouth.Strip.Height), GraphicsUnit.Pixel);
             if (notes.Count > 0 && preferences.Motion) Notes(graphics, now, seat != null || riding || onPanel);
+        }
+
+        // Her frame, plus a red and a cyan ghost pulled apart when she glitches, and a hologram fade when she flickers.
+        private static void DrawLiving(Graphics graphics, Bitmap strip, RectangleF to, RectangleF from, Life living, float wide)
+        {
+            float split = living != null ? living.Split : 0, fade = living != null ? living.Fade : 1;
+            if (split > 0.02f)
+            {
+                float shift = wide * 0.035f * split;
+                Ghost(graphics, strip, to, from, -shift, 1, 0.12f, 0.2f, 0.55f * Math.Min(1, split));
+                Ghost(graphics, strip, to, from, shift, 0.08f, 0.95f, 1, 0.55f * Math.Min(1, split));
+            }
+            if (fade < 0.995f) Ghost(graphics, strip, to, from, 0, 1, 1, 1, Math.Max(0.2f, fade));
+            else graphics.DrawImage(strip, to, from, GraphicsUnit.Pixel);
+        }
+
+        private static void Ghost(Graphics graphics, Bitmap strip, RectangleF to, RectangleF from, float shift, float red, float green, float blue, float alpha)
+        {
+            ColorMatrix tint = new ColorMatrix(new float[][]
+            {
+                new float[] { red, 0, 0, 0, 0 },
+                new float[] { 0, green, 0, 0, 0 },
+                new float[] { 0, 0, blue, 0, 0 },
+                new float[] { 0, 0, 0, alpha, 0 },
+                new float[] { 0, 0, 0, 0, 1 }
+            });
+            using (ImageAttributes paint = new ImageAttributes())
+            {
+                paint.SetColorMatrix(tint);
+                PointF[] corners = { new PointF(to.Left + shift, to.Top), new PointF(to.Right + shift, to.Top), new PointF(to.Left + shift, to.Bottom) };
+                graphics.DrawImage(strip, corners, from, GraphicsUnit.Pixel, paint);
+            }
         }
 
         private static GraphicsPath[] NoteShapes()
@@ -5386,6 +5481,7 @@ namespace CapriDesktop
             signals.Stop();
             brain.Cancel();
             StopChat();
+            StopWakeWord();
             if (talkKey) Native.UnregisterHotKey(Handle, TalkKeyId);
             talkKey = false;
             if (typeKey) Native.UnregisterHotKey(Handle, TypeKeyId);
@@ -6415,7 +6511,7 @@ namespace CapriDesktop
                             if (!UpdateDue(0, now) || UpdateDue(now - 3 * TimeSpan.TicksPerHour + 1, now) || !UpdateDue(now - 3 * TimeSpan.TicksPerHour, now) || !UpdateDue(now + 1, now) || UpdateDue(now, now, 19.9, false) || !UpdateDue(now, now, 20, false) || UpdateDue(now, now, 20, true)) throw new Exception("Three-hour or startup update timing failed.");
                             checks.Add("PASS update versions, three-hour boundary, startup check and clock rollback");
                             Release release;
-                            using (MemoryStream sample = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("{\"tag_name\":\"v9.0.0\",\"draft\":false,\"prerelease\":false,\"assets\":[{\"id\":1,\"name\":\"Capri.exe\"},{\"id\":2,\"name\":\"Capri-Setup.exe\"},{\"id\":3,\"name\":\"Capri-Setup-9.0.0.exe\",\"size\":10,\"browser_download_url\":\"https://github.com/lachydotmcg/capri-desktop/releases/download/v9.0.0/Capri-Setup-9.0.0.exe\"},{\"id\":4,\"name\":\"SHA256SUMS.txt\"}]}"))) release = ParseRelease(sample);
+                            using (MemoryStream sample = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("{\"tag_name\":\"v9.0.0\",\"draft\":false,\"prerelease\":false,\"assets\":[{\"id\":1,\"name\":\"Capri.exe\"},{\"id\":2,\"name\":\"Capri-Setup.exe\"},{\"id\":3,\"name\":\"Capri-Setup-9.0.0.exe\",\"size\":10,\"browser_download_url\":\"https://github.com/griffin881/capri-desktop/releases/download/v9.0.0/Capri-Setup-9.0.0.exe\"},{\"id\":4,\"name\":\"SHA256SUMS.txt\"}]}"))) release = ParseRelease(sample);
                             ReleaseAsset installer = Updater.Installer(release);
                             ReleaseAsset sums = release.Assets[3];
                             if (installer != release.Assets[2] || installer.Size != 10 || installer.Url == null || Updater.Installer(new Release { Assets = new[] { release.Assets[0], release.Assets[1] } }) != release.Assets[1] || Updater.Installer(new Release { Assets = new[] { new ReleaseAsset { Name = "Capri-Setup-other.exe" } } }) == null || Updater.Installer(new Release { Assets = new[] { release.Assets[0], new ReleaseAsset { Name = "Capri-Setup.exe.zip" }, new ReleaseAsset { Name = "Capri-Setup/evil.exe" } } }) != null) throw new Exception("Installer asset picking failed.");
@@ -6428,7 +6524,7 @@ namespace CapriDesktop
                             release.Assets = new[] { installer, sums };
                             checks.Add("PASS release assets: plain and versioned setup names, executable filter, draft and prerelease rejection");
                             string assetAddress = installer.Url;
-                            foreach (string badAddress in new[] { "file:///Capri-Setup.exe", "http://github.com/lachydotmcg/capri-desktop/releases/download/v9/Capri-Setup.exe", "https://github.com.example.com/lachydotmcg/capri-desktop/releases/download/v9/Capri-Setup.exe", "https://github.com/another/project/releases/download/v9/Capri-Setup.exe" })
+                            foreach (string badAddress in new[] { "file:///Capri-Setup.exe", "http://github.com/griffin881/capri-desktop/releases/download/v9/Capri-Setup.exe", "https://github.com.example.com/griffin881/capri-desktop/releases/download/v9/Capri-Setup.exe", "https://github.com/another/project/releases/download/v9/Capri-Setup.exe" })
                             {
                                 installer.Url = badAddress;
                                 bool rejected = false;
