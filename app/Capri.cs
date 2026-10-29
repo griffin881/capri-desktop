@@ -4411,8 +4411,18 @@ namespace CapriDesktop
             float s = TalkScale();
             Point feet = Feet();
             Rectangle area = Screen.FromPoint(feet).WorkingArea;
-            int top = Math.Min(feet.Y + (int)(2 * s), area.Bottom - TalkPill.Measure(s).Height - 2);
-            pill.Place(new Point(feet.X - (int)(4 * s), top), s);
+            Size size = TalkPill.Measure(s);
+            int wide = size.Width + (pill.Chatting ? (int)Math.Round(4 * s) + size.Height : 0);
+            int top = feet.Y + (int)(2 * s);
+            int centreX = feet.X - (int)(4 * s);
+            if (top + size.Height > area.Bottom - 2)
+            {
+                // No room under her, like when she stands on the taskbar: the pill sits beside her, not over her legs.
+                top = area.Bottom - size.Height - 2;
+                int bodyLeft = anchor.X + PaddingSize + (int)(preferences.Size * 0.14f), bodyRight = anchor.X + PaddingSize + (int)(preferences.Size * 0.86f), gap = (int)(6 * s);
+                centreX = bodyRight + gap + wide <= area.Right - 2 ? bodyRight + gap + size.Width / 2 : bodyLeft - gap - wide + size.Width / 2;
+            }
+            pill.Place(new Point(centreX, top), s);
         }
 
         private void OpenTyper()
