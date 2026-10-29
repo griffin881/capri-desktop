@@ -94,7 +94,7 @@ namespace CapriDesktop
             if (lines.Count > 160) lines = lines.GetRange(lines.Count - 160, 160);
             string talk = string.Join("\n", lines.ToArray());
             if (talk.Length > 9000) talk = talk.Substring(talk.Length - 9000);
-            Summary result = Crew.ParseJson<Summary>(brain.Consult(DigestPrompt, talk, 400));
+            Summary result = Json.Parse<Summary>(brain.Consult(DigestPrompt, talk, 400));
             if (result == null || string.IsNullOrWhiteSpace(result.Text)) return null;
             string day = lines[lines.Count - 1].Substring(0, 10);
             lock (gate)
@@ -143,6 +143,24 @@ namespace CapriDesktop
             foreach (string line in lines) if (line.StartsWith("- ", StringComparison.Ordinal)) kept.Add(line.Length > 260 ? line.Substring(0, 260) : line);
             int from = Math.Max(0, kept.Count - 6);
             return kept.Count == 0 ? "" : "\nWhat's been going on lately, from your diary (days.md). Bring it up when it fits, like asking how something went; don't recite it:\n" + string.Join("\n", kept.GetRange(from, kept.Count - from).ToArray());
+        }
+    }
+
+    // Reads the JSON a brain was asked for, even with chatter, code fences or thinking around it.
+    internal static class Json
+    {
+        internal static T Parse<T>(string reply) where T : class
+        {
+            string text = Brain.Visible(reply ?? "");
+            int start = text.IndexOf('{');
+            int end = text.LastIndexOf('}');
+            if (start < 0 || end <= start) return null;
+            try
+            {
+                using (MemoryStream stream = new MemoryStream(Encoding.UTF8.GetBytes(text.Substring(start, end - start + 1))))
+                    return (T)new DataContractJsonSerializer(typeof(T)).ReadObject(stream);
+            }
+            catch (SerializationException) { return null; }
         }
     }
 

@@ -22,6 +22,7 @@
     <Compile Include="../app/Brain.cs" Link="Shared/Brain.cs" />
     <Compile Include="../app/Engine.cs" Link="Shared/Engine.cs" />
     <Compile Include="../app/Hands.cs" Link="Shared/Hands.cs" />
+    <Compile Include="../app/Memory.cs" Link="Shared/Memory.cs" />
     <Compile Include="../app/Voice.cs" Link="Shared/Voice.cs" />
     <Compile Include="../app/VoicePack.cs" Link="Shared/VoicePack.cs" />
     <EmbeddedResource Include="../assets/sprites/*.png" LogicalName="Capri.Sprite.%(Filename)%(Extension)" />

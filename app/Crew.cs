@@ -648,19 +648,7 @@ namespace CapriDesktop
             return text.Append("\nReply with only one call, like: run_powershell{\"text\": \"winget --version\"}").ToString();
         }
 
-        internal static T ParseJson<T>(string reply) where T : class
-        {
-            string text = Brain.Visible(reply ?? "");
-            int start = text.IndexOf('{');
-            int end = text.LastIndexOf('}');
-            if (start < 0 || end <= start) return null;
-            try
-            {
-                using (MemoryStream stream = new MemoryStream(Encoding.UTF8.GetBytes(text.Substring(start, end - start + 1))))
-                    return (T)new DataContractJsonSerializer(typeof(T)).ReadObject(stream);
-            }
-            catch (SerializationException) { return null; }
-        }
+        internal static T ParseJson<T>(string reply) where T : class { return Json.Parse<T>(reply); }
 
         internal static string Pick(string kind, string ask)
         {
