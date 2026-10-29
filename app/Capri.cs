@@ -8982,7 +8982,7 @@ namespace CapriDesktop
                                         checks.Add("PASS NVIDIA sight note: with HIGHER picked, the line under BRAIN says most NVIDIA models can't see your screen");
                                         preferences.PaidKey = null;
                                         ChooseTier(2);
-                                        if (preferences.Tier != 2 || brain.Remote != null || preferences.TextKey != null || !mainframe.TextStatus.EndsWith("| Paste a ChatGPT or Claude key | Connect", StringComparison.Ordinal) || !mainframe.TiersFit) throw new Exception("MAX INTELLIGENCE without its key did not fall back to her own brain: " + mainframe.TextStatus);
+                                        if (preferences.Tier != 2 || brain.Remote != null || preferences.TextKey != null || !mainframe.TextStatus.EndsWith("| Paste a key or server link | Connect", StringComparison.Ordinal) || !mainframe.TiersFit) throw new Exception("MAX INTELLIGENCE without its key did not fall back to her own brain: " + mainframe.TextStatus);
                                     }
                                     finally
                                     {
