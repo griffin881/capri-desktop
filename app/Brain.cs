@@ -514,6 +514,23 @@ namespace CapriDesktop
         private static readonly Regex Personal = new Regex(@"\b(passwords?|passcodes?|pin (code|number)|log ?in details|credit card|card number|bank (account|details|number)|account number|sort code|routing number|social security|passport|(home|street|postal|email|e-mail) address|(my|their|his|her) address|postcode|post code|zip code|(phone|mobile|cell) number|surname|last name|full name|real name|date of birth|(i|they) live (in|at|on)|(my|their|his|her) school(?: is|'s| is called| called)|school (is )?called)\b|@\w+\.\w+|\d[\d\s-]{6,}\d|\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b", RegexOptions.IgnoreCase);
         internal const string Private = "I keep addresses, schools, numbers and passwords out of my notes, choom.";
 
+        // Her longer memory: the projects they're juggling and the last few lines of her diary.
+        internal static string Lately() { return Orbits.Context() + Journal.Lately(); }
+
+        // How her last replies started, so she starts this one some other way.
+        private string Fresh()
+        {
+            List<string> openers = new List<string>();
+            lock (gate)
+                for (int i = history.Count - 1; i >= 0 && openers.Count < 5; i--)
+                {
+                    if (history[i].Role != "assistant" || string.IsNullOrWhiteSpace(history[i].Content)) continue;
+                    string[] words = Regex.Replace(history[i].Content, @"\s+", " ").Trim().Split(' ');
+                    openers.Add(string.Join(" ", words, 0, Math.Min(6, words.Length)));
+                }
+            return openers.Count < 2 ? "" : "\nYour last replies started like this: " + string.Join(" | ", openers.ToArray()) + ". Start this one a different way, and don't reuse their jokes, slang or phrasing.";
+        }
+
         internal static string Remembered()
         {
             string notes = Notes();
@@ -715,7 +732,7 @@ namespace CapriDesktop
             if (model == null) throw new BrainException(Offline);
             Func<string, ToolArguments, string> act = Act;
             List<ChatMessage> messages = new List<ChatMessage>();
-            messages.Add(new ChatMessage("system", Character + Remembered() + Gap() + (act != null ? Hands.Chat : "") + Now()));
+            messages.Add(new ChatMessage("system", Character + Remembered() + Lately() + Gap() + Fresh() + (act != null ? Hands.Chat : "") + Now()));
             List<ChatMessage> recent;
             lock (gate)
             {
@@ -741,6 +758,8 @@ namespace CapriDesktop
                     history.Add(new ChatMessage("assistant", answer));
                     Kept();
                 }
+                Journal.Add("them", text);
+                Journal.Add("Capri", answer);
                 return answer;
             }
             // "Yes" to her asking whether to do what they just asked runs what they asked.
@@ -839,6 +858,8 @@ namespace CapriDesktop
                 history.Add(new ChatMessage("assistant", said));
                 Kept();
             }
+            Journal.Add("them", text);
+            Journal.Add("Capri", said);
             return said;
         }
 
@@ -901,6 +922,8 @@ namespace CapriDesktop
                 history.Add(new ChatMessage("assistant", said));
                 Kept();
             }
+            if (!(asked ?? "").StartsWith("(", StringComparison.Ordinal)) Journal.Add("them", asked);
+            Journal.Add("Capri", said);
         }
 
         // A one-off question with no tools and no chat history, like her crew planning or checking a job.

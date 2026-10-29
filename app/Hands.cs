@@ -91,6 +91,7 @@ namespace CapriDesktop
             "To mute, unmute or turn off their mic, call shortcut with discord_mute; to deafen or undeafen them, discord_deafen. Don't ask which: mute means the mic. Screenshots, clips, recording, Game Bar, show desktop, Task Manager, clipboard and emoji are shortcuts too.\n" +
             "To shut down, turn off, restart, sleep, lock or sign out of their PC, call power. They asked, so do it: never ask if they're sure.\n" +
             "Bigger jobs go to your crew with start_job, with the whole job in their words: installing or setting something up, running PowerShell or terminal commands, downloading models, Kaggle or git setup, researching a topic, or building and coding something. Asking how the jobs are going, to stop one or to see the jobs board is jobs.\n" +
+            "Their projects in progress are orbits: when they check in, say what they did or what's next on a project, start or finish a project, or ask what they're doing today or what's on their plate, call orbit.\n" +
             "Never reply with a question about whether to do what they asked. Call the tool.\n" +
             "If they ask you to remember, note down or forget something about them, or to leave, make or save a memory, call remember with a short note about them in the third person.\n" +
             "Questions about their current screen or song need a tool too. If the target is unclear, pick the closest match yourself. For chat, negated or hypothetical requests, call no tool and reply with only the word: chat";
@@ -122,6 +123,8 @@ namespace CapriDesktop
               "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"What to do\",\"enum\":[\"shut_down\",\"restart\",\"sleep\",\"lock\",\"sign_out\",\"cancel\"]},\"minutes\":{\"type\":\"string\",\"description\":\"How many minutes from now, only if they said when\"}},\"required\":[\"action\"]}" },
             { "start_job", "Hand a bigger job to your crew so it runs in the background while you keep talking: installing or setting things up, PowerShell or terminal commands, downloading models, Kaggle, GitHub or git setup, researching a topic and writing up notes, or building and coding a project. Use it for anything that takes more than a click or two.",
               "{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\",\"description\":\"The whole job in their words, with every detail they gave\"},\"kind\":{\"type\":\"string\",\"description\":\"Which worker, if they said or it's obvious: terminal for setups, installs and commands, research for looking things up, builder for coding\",\"enum\":[\"auto\",\"terminal\",\"research\",\"builder\"]},\"target\":{\"type\":\"string\",\"description\":\"A folder to work in, only if they named one\"}},\"required\":[\"task\"]}" },
+            { "orbit", "Keep track of the projects they're juggling at once, their orbits: put one in orbit, log what they did or their next step when they check in, mark one done, or list them when they ask what they're doing today or what's on their plate.",
+              "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"What to do\",\"enum\":[\"add\",\"note\",\"done\",\"list\"]},\"name\":{\"type\":\"string\",\"description\":\"The project's name\"},\"text\":{\"type\":\"string\",\"description\":\"What they did, or their next step, in their words\"}},\"required\":[\"action\"]}" },
             { "jobs", "Check on your crew's jobs, stop one, or open the jobs board.",
               "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"What to do\",\"enum\":[\"list\",\"stop\",\"open\"]},\"name\":{\"type\":\"string\",\"description\":\"Which job, by number or name, for stop\"}},\"required\":[\"action\"]}" }
         };
@@ -145,6 +148,7 @@ namespace CapriDesktop
             "|" + LookupWords +
             @"|^(set up|setup|install|reinstall|uninstall|download|configure|research|look into|dig into|read up on|find out (about|how|why|what|if|whether)|build( me)?|code( me)?|program|scaffold|debug|refactor|write (me )?(a |an )?(script|program|app|tool|bot)|make (me )?(a |an )?(script|program|app|website|site|tool|bot|game)|fix (my|the|this) (code|script|app|site|build|bug|install|setup|python|pc)|run (a |the |this |my )?(powershell|terminal|command|script|notebook)|kick off|spin up|start (up )?(my |the )?(kaggle|notebook|deepseek|server|tunnel|job)|update (my |the )?(drivers?|python|node|git|models?|packages?|apps?))\b" +
             @"|^(how('?s| is| are)|what('?s| is| are)) (my |the |our )?(jobs?|crew|workers?)\b|^(check on|stop|cancel|kill) (the |my |that |this )?(job|jobs|crew|worker|research|install|build)\b|^(open|show( me)?) (the |my )?(jobs?|jobs board|crew)\b" +
+            @"|^(check(ing)? in|quick check ?in)\b(?! on me)|^(what am i (doing|working on|supposed to (do|be doing))( today)?|what('?s| is) (on )?my (plate|orbits?|list)|what should i (do|work on|touch)( next| today)?|(add|put) .+ (in|into|to) (my )?orbits?|(i )?(finished|done with|wrapped up|landed) (my |the )?\w+)\b" +
             @"|^(ouvre|ouvrir|lancer?|d[ée]marrer?|fermer?|quitter?|r[ée]duis|r[ée]duire|minimiser?|chercher?|rechercher?|mets|mettre|jouer?|passer?|couper?|augmenter?|baisser?|regarder?|afficher?|montre-moi|va sur|aller sur|retourne sur)\b" +
             @"|^(tu vois|qu'est-ce que (tu vois|je fais)|c'est quoi (cette|la) (chanson|musique)|quelle (chanson|musique)|qu'est-ce qu'il y a sur mon [ée]cran)\b", RegexOptions.IgnoreCase);
 
@@ -222,6 +226,7 @@ namespace CapriDesktop
                 if (tool == "shortcut") return Shortcut(args.Name);
                 if (tool == "remember") return args.Action == "forget" ? Brain.Unnote(Theirs(args.Text)) : CallMe(args.Text) ?? Brain.Note(Theirs(args.Text));
                 if (tool == "power") return Turn(args.Action, args.Minutes);
+                if (tool == "orbit") return Orbits.Handle(args);
                 if (tool == "start_job" || tool == "jobs") { Func<string, ToolArguments, string> crew = Crew; return crew == null ? "My crew isn't here yet." : crew(tool, args); }
                 return "There's no tool called " + tool + ".";
             }
@@ -612,7 +617,7 @@ namespace CapriDesktop
 
         internal static bool Failed(string result) { return Regex.IsMatch(result ?? "", @"^(Which app|What should I play|Not (opening|playing) that|No app called|More than one|That didn't work|Couldn't|There's no|That isn't a website|Which job|Not doing that|Should I |Got lost|Ran out of steps|You pressed Esc|You grabbed the mouse|Using the mouse and keyboard isn't)|isn't open\.$|but (couldn't|it's still open)"); }
 
-        private static readonly Regex LooseText = new Regex(@"\b(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs)\s*(\{[^{}]*\}|\([^()]*\))");
+        private static readonly Regex LooseText = new Regex(@"\b(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit)\s*(\{[^{}]*\}|\([^()]*\))");
         private static readonly Regex ToolPair = new Regex(@"[""']?(\w+)[""']?\s*[:=]\s*(?:""([^""]*)""|'([^']*)'|([^,})\s][^,})]*))");
 
         private static ToolArguments Pairs(string tool, string call)
@@ -645,7 +650,7 @@ namespace CapriDesktop
             else if (key == "minutes") args.Minutes = value;
         }
 
-        private static readonly Regex ToolText = new Regex(@"\A(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs)\s*(\{.*\})\z", RegexOptions.Singleline);
+        private static readonly Regex ToolText = new Regex(@"\A(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit)\s*(\{.*\})\z", RegexOptions.Singleline);
 
         internal static bool Typed(string reply, out string tool, out ToolArguments args, bool loose = false)
         {
@@ -701,6 +706,7 @@ namespace CapriDesktop
             if (tool == "use_computer") return Named(args.Task);
             if (tool == "start_job") return Named(args.Task) && (string.IsNullOrEmpty(args.Kind) || Regex.IsMatch(args.Kind, @"\A(auto|terminal|research|builder)\z"));
             if (tool == "jobs") return Regex.IsMatch(args.Action ?? "list", @"\A(list|stop|open)\z");
+            if (tool == "orbit") return Regex.IsMatch(args.Action ?? "list", @"\A(add|note|done|list)\z") && (args.Action == "list" || args.Action == "note" || args.Action == null || Named(args.Name));
             if (tool == "shortcut") return Regex.IsMatch(args.Name ?? "", @"\A(discord_mute|discord_deafen|screenshot|clip_that|record|game_bar|show_desktop|task_manager|clipboard|emoji)\z");
             if (tool == "remember") return Named(args.Text) && (string.IsNullOrEmpty(args.Action) || args.Action == "remember" || args.Action == "forget");
             if (tool == "power") return Regex.IsMatch(args.Action ?? "", @"\A(shut_down|restart|sleep|lock|sign_out|cancel)\z") && (string.IsNullOrEmpty(args.Minutes) || Regex.IsMatch(args.Minutes.Trim(), @"\A\d{1,4}\z"));

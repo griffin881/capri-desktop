@@ -220,7 +220,7 @@ namespace CapriDesktop
                 ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
                 socket = new ClientWebSocket();
                 socket.ConnectAsync(new Uri(url), stop.Token).Wait();
-                Send("{\"type\":\"conversation_initiation_client_data\",\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":" + Voice.Quote(Prompt + Brain.Speech() + Brain.Remembered()) + "}" + (Language != "en" ? ",\"language\":" + Voice.Quote(Language) : "") + "},\"tts\":{\"voice_id\":" + Voice.Quote(voiceId) + "}}}");
+                Send("{\"type\":\"conversation_initiation_client_data\",\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":" + Voice.Quote(Prompt + Brain.Speech() + Brain.Remembered() + Brain.Lately()) + "}" + (Language != "en" ? ",\"language\":" + Voice.Quote(Language) : "") + "},\"tts\":{\"voice_id\":" + Voice.Quote(voiceId) + "}}}");
                 byte[] buffer = new byte[65536];
                 using (MemoryStream message = new MemoryStream())
                     while (!stop.IsCancellationRequested)
