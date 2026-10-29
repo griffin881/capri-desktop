@@ -4627,9 +4627,16 @@ namespace CapriDesktop
             EarsNote(text, problem);
         }
 
+        // Long rants are welcome: the deeper into one they are, the longer a pause she waits through before answering,
+        // up to two minutes. Fifteen seconds of perfectly steady sound is a fan or a hum, not a person.
+        private double uttLow = 1, uttHigh;
+        private const int RantChunks = 1200;
+        private static int PauseFor(int count) { return count < 40 ? 7 : count < 100 ? 11 : 15; }
+
         private void Gather(short[] chunk)
         {
-            bool loud = Speaker.Loudness(chunk, 0, chunk.Length) >= WakeLevel;
+            double chunkLevel = Speaker.Loudness(chunk, 0, chunk.Length);
+            bool loud = chunkLevel >= WakeLevel;
             lock (waking)
             {
                 if (!local || !earsReady || dictation != null || ears.Muted || earsShut || transcribing) { utterance = null; preroll.Clear(); loudRun = 0; quietRun = 0; return; }
@@ -4649,13 +4656,17 @@ namespace CapriDesktop
                     preroll.Clear();
                     loudRun = 0;
                     quietRun = 0;
+                    uttLow = 1;
+                    uttHigh = 0;
                     return;
                 }
                 utterance.Add(chunk);
                 quietRun = loud ? 0 : quietRun + 1;
-                if (quietRun < 7 && utterance.Count < 150) return;
+                if (loud) { uttLow = Math.Min(uttLow, chunkLevel); uttHigh = Math.Max(uttHigh, chunkLevel); }
+                bool steady = utterance.Count >= 150 && uttHigh < uttLow * 1.2;
+                if (quietRun < PauseFor(utterance.Count) && utterance.Count < RantChunks && !steady) return;
                 short[][] taken = utterance.ToArray();
-                bool capped = quietRun < 7;
+                bool capped = quietRun < PauseFor(utterance.Count);
                 utterance = null;
                 quietRun = 0;
                 int ticket = chatTicket;
@@ -4663,7 +4674,7 @@ namespace CapriDesktop
                 if (capped)
                 {
                     noiseHold = true;
-                    Post(delegate { if (ticket == chatTicket && local) Missed("I heard 15 seconds without a pause. Try a shorter line or lower your mic volume.", false); });
+                    Post(delegate { if (ticket == chatTicket && local) Missed(steady ? "That sounds like steady noise, not talking. Lower your mic volume or move away from the fan." : "I heard two minutes without a pause. Take a breath and keep going.", false); });
                     return;
                 }
                 transcribing = true;
@@ -4709,10 +4720,41 @@ namespace CapriDesktop
             {
                 string text = null;
                 string problem = null;
-                try { text = Hearing.Text(samples); }
+                try { text = HearLong(samples); }
                 catch (Exception error) { problem = Voice.Short(error.Message); }
                 Post(delegate { HeardLocally(ticket, request, text, problem); });
             });
+        }
+
+        // A rant is heard in pieces of up to 25 seconds, each cut at the quietest moment near its end.
+        private static string HearLong(short[] samples)
+        {
+            int piece = Ears.Rate * 25;
+            if (samples.Length <= piece + Ears.Rate * 5) return Hearing.Text(samples);
+            System.Collections.Generic.List<string> heard = new System.Collections.Generic.List<string>();
+            int at = 0;
+            while (at < samples.Length)
+            {
+                int end = Math.Min(samples.Length, at + piece);
+                if (samples.Length - end < Ears.Rate * 5) end = samples.Length;
+                else
+                {
+                    int best = end;
+                    double quietest = double.MaxValue;
+                    for (int c = end - Ears.Rate * 4; c + Ears.Chunk <= end; c += Ears.Chunk / 2)
+                    {
+                        double level = Speaker.Loudness(samples, c, Ears.Chunk);
+                        if (level < quietest) { quietest = level; best = c + Ears.Chunk / 2; }
+                    }
+                    end = best;
+                }
+                short[] part = new short[end - at];
+                Array.Copy(samples, at, part, 0, part.Length);
+                string text = Hearing.Text(part);
+                if (!string.IsNullOrWhiteSpace(text)) heard.Add(text.Trim());
+                at = end;
+            }
+            return string.Join(" ", heard.ToArray());
         }
 
         private void HeardLocally(int ticket, int request, string text, string problem)
@@ -5333,7 +5375,7 @@ namespace CapriDesktop
             if (!box.Visible && box.Opened < 0) box.Opened = now;
             box.State = talkState;
             box.Heard = heard;
-            box.Reply = talkState == TalkState.Thinking ? (working ?? (slowWarned ? (brain.Remote != null ? "Still thinking. Waiting for " + brain.Remote.Company + "." : SlowLocal) : null)) : reply;
+            box.Reply = talkState == TalkState.Thinking ? (working ?? (slowWarned ? (brain.Remote != null ? null : SlowLocal) : null)) : reply;
             box.Revealed = revealed;
             float s = TalkScale();
             Point head = Head();
@@ -9510,7 +9552,7 @@ namespace CapriDesktop
                                     thinkingSince = clock.Elapsed.TotalSeconds - 9;
                                     int waitingTicket = asking;
                                     CheckSlow(clock.Elapsed.TotalSeconds);
-                                    if (!slowWarned || box.State != TalkState.Thinking || box.Reply != "Still thinking. Waiting for NVIDIA." || mainframe.Status.IndexOf("Waiting for NVIDIA", StringComparison.Ordinal) < 0 || asking != waitingTicket || replyDone >= 0) throw new Exception("A slow cloud reply stayed blank or ended its turn.");
+                                    if (!slowWarned || box.State != TalkState.Thinking || box.Reply != null || mainframe.Status.IndexOf("Waiting for NVIDIA", StringComparison.Ordinal) < 0 || asking != waitingTicket || replyDone >= 0) throw new Exception("A slow cloud reply stayed blank or ended its turn.");
                                     Begin(asking, "Here now.", TalkState.Talking, null);
                                     UpdateTalk(clock.Elapsed.TotalSeconds);
                                     if (slowWarned || !double.IsNaN(thinkingSince) || box.Reply != "Here now." || mainframe.Status.IndexOf("Waiting for", StringComparison.Ordinal) >= 0) throw new Exception("The real reply did not clear the waiting hint.");
@@ -9523,7 +9565,7 @@ namespace CapriDesktop
                                     replyDone = -1;
                                     thinkingSince = clock.Elapsed.TotalSeconds - 9;
                                     CheckSlow(clock.Elapsed.TotalSeconds);
-                                    if (!slowWarned || box.Reply != "Still thinking. Waiting for NVIDIA.") throw new Exception("Free voice chat hid the cloud hint.");
+                                    if (!slowWarned || box.Reply != null) throw new Exception("Free voice chat showed tech talk in her bubble.");
                                     chatting = wasChatting;
                                     local = wasLocal;
                                     CloseTalk();
@@ -11284,7 +11326,7 @@ namespace CapriDesktop
                             if (!earsShut || utterance != null || transcribing) throw new Exception("Muting did not discard the partial utterance.");
                             ToggleMic();
                             for (int i = 0; i < 150; i++) ears.Feed(talk);
-                            if (!noiseHold || utterance != null || transcribing) throw new Exception("The 15-second cap sent continuous noise to her ears.");
+                            if (!noiseHold || utterance != null || transcribing) throw new Exception("Fifteen seconds of steady noise reached her ears.");
                             for (int i = 0; i < 300; i++) ears.Feed(talk);
                             for (int i = 0; i < 8; i++) ears.Feed(hush);
                             if (!noiseHold || transcribing) throw new Exception("Continuous noise rearmed without a full pause.");

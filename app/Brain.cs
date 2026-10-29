@@ -496,7 +496,7 @@ namespace CapriDesktop
         private static string Longer()
         {
             int wordy = Wordiness;
-            return wordy == 1 ? "\nThey picked longer replies: use up to four sentences, under 70 words." : wordy >= 2 ? "\nThey picked long replies: use up to a short paragraph, under 140 words." : "";
+            return wordy == 1 ? "\nThey picked longer replies: quick banter still gets a sentence or two, but real questions, ideas and plans get up to four sentences, under 70 words." : wordy >= 2 ? "\nThey picked long replies: quick banter still gets a sentence or two, but when they rant, think out loud or ask something with real substance (theory, politics, plans, their projects), answer properly: up to a short spoken paragraph, under 140 words, no lists." : "";
         }
 
         internal static int Window { get { return Recall > 8 ? 8192 : 4096; } }
