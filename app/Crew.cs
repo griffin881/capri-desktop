@@ -403,6 +403,58 @@ namespace CapriDesktop
             return results.Count == 0 ? "No results came back for that search. Try different words." : string.Join("\n", results.ToArray());
         }
 
+        // A quick answer for her, not a job: live weather when it's about weather, else the top search results and the best page's text.
+        internal static string LookUp(string query)
+        {
+            query = Regex.Replace(query ?? "", @"\s+", " ").Trim();
+            if (query.Length == 0) return "Nothing to look up.";
+            if (Regex.IsMatch(query, @"\b(weather|forecast|temperature|temp|how (hot|cold|warm)|rain(ing|y)?|snow(ing|y)?|sunny|humid(ity)?|wind(y)?|degrees|storm(s|y)?)\b", RegexOptions.IgnoreCase))
+            {
+                string weather = Weather(query);
+                if (weather != null) return "Looked up " + Voice.Quote(query) + ":\n" + weather;
+            }
+            string results = Search(query);
+            StringBuilder text = new StringBuilder("Search results:\n" + Trim(results, 1800));
+            Match first = Regex.Match(results, @"^1\. .*\n\s+(https?://\S+)", RegexOptions.Multiline);
+            if (first.Success)
+            {
+                string page = Page(first.Groups[1].Value);
+                if (!page.StartsWith("Couldn't", StringComparison.Ordinal)) text.Append("\n\nFrom " + first.Groups[1].Value + ":\n" + Trim(page, 1800));
+            }
+            return "Looked up " + Voice.Quote(query) + " online:\n" + text;
+        }
+
+        // Live weather from wttr.in; with no place named, it goes by where the PC is.
+        internal static string Weather(string query)
+        {
+            Match at = Regex.Match(query, @"\b(?:in|for|at)\s+([A-Za-z][A-Za-z .,'-]{1,40}?)(?:\s+(?:today|tomorrow|tonight|this week|right now|now|later)|[?.!]|$)", RegexOptions.IgnoreCase);
+            string place = at.Success ? at.Groups[1].Value.Trim() : "";
+            string json = Fetch("https://wttr.in/" + Uri.EscapeDataString(place) + "?format=j1");
+            if (string.IsNullOrEmpty(json)) return null;
+            Match current = Regex.Match(json, @"""current_condition""\s*:\s*\[(.*?)\]\s*,\s*""nearest_area""", RegexOptions.Singleline);
+            string now = current.Success ? current.Groups[1].Value : json;
+            string temp = Field(now, "temp_F");
+            if (temp == null) return null;
+            Match desc = Regex.Match(now, @"""weatherDesc""\s*:\s*\[\s*\{\s*""value""\s*:\s*""([^""]*)""");
+            Match area = Regex.Match(json, @"""areaName""\s*:\s*\[\s*\{\s*""value""\s*:\s*""([^""]*)""");
+            StringBuilder text = new StringBuilder("Weather for " + (area.Success ? area.Groups[1].Value : place.Length > 0 ? place : "their area") +
+                " (wttr.in): right now " + temp + "\u00B0F, feels like " + Field(now, "FeelsLikeF") + "\u00B0F, " + (desc.Success ? desc.Groups[1].Value.Trim().ToLowerInvariant() : "") + ", humidity " + Field(now, "humidity") + "%.");
+            string[] days = { "Today", "Tomorrow", "The day after" };
+            int d = 0;
+            foreach (Match day in Regex.Matches(json, @"""maxtempF""\s*:\s*""(-?\d+)"".{0,300}?""mintempF""\s*:\s*""(-?\d+)""", RegexOptions.Singleline))
+            {
+                if (d >= days.Length) break;
+                text.Append(" " + days[d++] + ": high " + day.Groups[1].Value + "\u00B0F, low " + day.Groups[2].Value + "\u00B0F.");
+            }
+            return text.ToString();
+        }
+
+        private static string Field(string json, string key)
+        {
+            Match m = Regex.Match(json ?? "", @"""" + key + @"""\s*:\s*""([^""]*)""");
+            return m.Success ? m.Groups[1].Value : null;
+        }
+
         internal static string Page(string address)
         {
             address = (address ?? "").Trim();
@@ -805,7 +857,7 @@ namespace CapriDesktop
         internal CrewWindow(Crew crew, Icon icon)
         {
             this.crew = crew;
-            Text = "Capri · Jobs";
+            Text = "Capri \u00B7 Jobs";
             if (icon != null) Icon = icon;
             BackColor = Back;
             ForeColor = Ink;
@@ -893,7 +945,7 @@ namespace CapriDesktop
         {
             if (g == null) { details.Text = "No jobs yet. Ask her for something bigger, like \"set up the Kaggle CLI\" or \"research the best local voice models\"."; shownId = null; return; }
             StringBuilder text = new StringBuilder();
-            text.Append("JOB " + g.Id + "  ·  " + g.Status.ToUpperInvariant() + "\r\n" + g.Title + "\r\n\r\n");
+            text.Append("JOB " + g.Id + "  \u00B7  " + g.Status.ToUpperInvariant() + "\r\n" + g.Title + "\r\n\r\n");
             text.Append("You asked: " + g.Ask + "\r\n");
             text.Append("Worker: " + Crew.WorkerName(g.Worker) + "    Brain: " + (g.Mind ?? "-") + "\r\n");
             text.Append("Folder: " + g.Folder + "\r\n");

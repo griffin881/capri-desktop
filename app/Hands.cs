@@ -87,7 +87,7 @@ namespace CapriDesktop
             "When they name an app, never guess a website for it: use open_app, or use_computer if there's more to do.\n" +
             "If they leave the pick to you, like a song or a video, pick one yourself that fits.\n" +
             "Your own website is " + Home + ": when they ask for your website or page, call open_website with that address.\n" +
-            "If they ask something you'd have to look up, like the weather, news, scores, prices, times or facts you're unsure of, call open_website with site google and their question as the search.\n" +
+            "If they ask something you'd have to look up, like the weather, news, scores, prices, times or facts you're unsure of, call look_up with their question. Only open Google itself (open_website, site google) when they ask for the browser or a tab.\n" +
             "To mute, unmute or turn off their mic, call shortcut with discord_mute; to deafen or undeafen them, discord_deafen. Don't ask which: mute means the mic. Screenshots, clips, recording, Game Bar, show desktop, Task Manager, clipboard and emoji are shortcuts too.\n" +
             "To shut down, turn off, restart, sleep, lock or sign out of their PC, call power. They asked, so do it: never ask if they're sure.\n" +
             "Bigger jobs go to your crew with start_job, with the whole job in their words: installing or setting something up, running PowerShell or terminal commands, downloading models, Kaggle or git setup, researching a topic, or building and coding something. Asking how the jobs are going, to stop one or to see the jobs board is jobs.\n" +
@@ -125,6 +125,8 @@ namespace CapriDesktop
               "{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\",\"description\":\"The whole job in their words, with every detail they gave\"},\"kind\":{\"type\":\"string\",\"description\":\"Which worker, if they said or it's obvious: terminal for setups, installs and commands, research for looking things up, builder for coding\",\"enum\":[\"auto\",\"terminal\",\"research\",\"builder\"]},\"target\":{\"type\":\"string\",\"description\":\"A folder to work in, only if they named one\"}},\"required\":[\"task\"]}" },
             { "orbit", "Keep track of the projects they're juggling at once, their orbits: put one in orbit, log what they did or their next step when they check in, mark one done, or list them when they ask what they're doing today or what's on their plate.",
               "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"What to do\",\"enum\":[\"add\",\"note\",\"done\",\"list\"]},\"name\":{\"type\":\"string\",\"description\":\"The project's name\"},\"text\":{\"type\":\"string\",\"description\":\"What they did, or their next step, in their words\"}},\"required\":[\"action\"]}" },
+            { "look_up", "Look something up online and read it yourself, so you can tell them the answer: weather, news, scores, prices, times, or facts you're unsure of.",
+              "{\"type\":\"object\",\"properties\":{\"search\":{\"type\":\"string\",\"description\":\"What to look up, in plain words\"}},\"required\":[\"search\"]}" },
             { "jobs", "Check on your crew's jobs, stop one, or open the jobs board.",
               "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"What to do\",\"enum\":[\"list\",\"stop\",\"open\"]},\"name\":{\"type\":\"string\",\"description\":\"Which job, by number or name, for stop\"}},\"required\":[\"action\"]}" }
         };
@@ -148,6 +150,7 @@ namespace CapriDesktop
             "|" + LookupWords +
             @"|^(set up|setup|install|reinstall|uninstall|download|configure|research|look into|dig into|read up on|find out (about|how|why|what|if|whether)|build( me)?|code( me)?|program|scaffold|debug|refactor|write (me )?(a |an )?(script|program|app|tool|bot)|make (me )?(a |an )?(script|program|app|website|site|tool|bot|game)|fix (my|the|this) (code|script|app|site|build|bug|install|setup|python|pc)|run (a |the |this |my )?(powershell|terminal|command|script|notebook)|kick off|spin up|start (up )?(my |the )?(kaggle|notebook|deepseek|server|tunnel|job)|update (my |the )?(drivers?|python|node|git|models?|packages?|apps?))\b" +
             @"|^(how('?s| is| are)|what('?s| is| are)) (my |the |our )?(jobs?|crew|workers?)\b|^(check on|stop|cancel|kill) (the |my |that |this )?(job|jobs|crew|worker|research|install|build)\b|^(open|show( me)?) (the |my )?(jobs?|jobs board|crew)\b" +
+            @"|^(get|have|put|send|assign|set) (a |an |one of )?(your |the |my )?(models?|workers?|agents?|crew|ais?|someone|somebody|bots?)\b" +
             @"|^(check(ing)? in|quick check ?in)\b(?! on me)|^(what am i (doing|working on|supposed to (do|be doing))( today)?|what('?s| is) (on )?my (plate|orbits?|list)|what should i (do|work on|touch)( next| today)?|(add|put) .+ (in|into|to) (my )?orbits?|(i )?(finished|done with|wrapped up|landed) (my |the )?\w+)\b" +
             @"|^(ouvre|ouvrir|lancer?|d[ée]marrer?|fermer?|quitter?|r[ée]duis|r[ée]duire|minimiser?|chercher?|rechercher?|mets|mettre|jouer?|passer?|couper?|augmenter?|baisser?|regarder?|afficher?|montre-moi|va sur|aller sur|retourne sur)\b" +
             @"|^(tu vois|qu'est-ce que (tu vois|je fais)|c'est quoi (cette|la) (chanson|musique)|quelle (chanson|musique)|qu'est-ce qu'il y a sur mon [ée]cran)\b", RegexOptions.IgnoreCase);
@@ -177,6 +180,12 @@ namespace CapriDesktop
         internal static Func<string, int, bool> Power = Switch;
         // Her crew: bigger jobs that run in the background.
         internal static Func<string, ToolArguments, string> Crew;
+        // Reading the web for an answer instead of opening Google for them. Off in tests, so Google searches stay searches there.
+        internal static Func<string, string> LookUp;
+        internal static volatile bool Answers;
+        private static readonly Regex Browsing = new Regex(@"\b(open|pull up|bring up|show me|launch)\b.*\b(tab|tabs|browser|page|site|website|results|google\.com)\b|^\W*open (up )?google\b|\bin (my|the|a) (browser|tab)\b", RegexOptions.IgnoreCase);
+        // They asked to see Google itself, not for an answer.
+        internal static bool Browse(string said) { return Browsing.IsMatch(said ?? ""); }
         private static readonly string[] Browsers = { "chrome", "msedge", "firefox", "brave", "opera", "vivaldi" };
         private static readonly string[] Shell = { "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd" };
         private delegate bool Visit(IntPtr window, IntPtr data);
@@ -227,6 +236,7 @@ namespace CapriDesktop
                 if (tool == "remember") return args.Action == "forget" ? Brain.Unnote(Theirs(args.Text)) : CallMe(args.Text) ?? Brain.Note(Theirs(args.Text));
                 if (tool == "power") return Turn(args.Action, args.Minutes);
                 if (tool == "orbit") return Orbits.Handle(args);
+                if (tool == "look_up") { Func<string, string> find = LookUp; return string.IsNullOrWhiteSpace(args.Search) ? "Look up what, choom?" : find == null ? OpenSite("google", args.Search) : find(args.Search.Trim()); }
                 if (tool == "start_job" || tool == "jobs") { Func<string, ToolArguments, string> crew = Crew; return crew == null ? "My crew isn't here yet." : crew(tool, args); }
                 return "There's no tool called " + tool + ".";
             }
@@ -381,6 +391,8 @@ namespace CapriDesktop
         internal static bool Credits(string said) { return Credit.IsMatch((said ?? "").Replace('’', '\'')); }
 
         private static readonly Regex Doing = new Regex(@"^((i (want|need) (you|u) to|go ahead and|just|now|then|and)\s+)*(send|dm|pm|message|msg|text|ping|tell|say|ask|type|write|post|tweet|reply|respond|put|paste|share|open|launch|start|run|close|quit|exit|kill|join|leave|end|hang up|call|ring|turn|shut|power|switch|restart|reboot|sleep|lock|log|sign|mute|unmute|deafen|undeafen|play|pause|skip|go|click|tap|press|scroll|search|google|find|make|create|delete|remove|add|invite|kick|ban|block|unblock|react|pin|accept|decline|install|uninstall|download|change|set|minimi[sz]e|maximi[sz]e|move|copy|rename|save|record|clip|fill|submit|hop|get on|get off|pick up|answer|reject)\b(?!\s+(me|us)\b)", RegexOptions.IgnoreCase);
+        // Turning down a job in character ("click it yourself", "I'm not your secretary") is still a job she should do.
+        private static readonly Regex Refusal = new Regex(@"\b((do|click|open|type|google|search|find|look) (it|that|this) (up )?yourself|(yourself|ur ?self),? (choom|e)\b|(i'?m|i am) not (your|a|some) (secretary|assistant|servant|maid|butler|it guy|tech support|lab rat|search engine|errand)|not your (secretary|assistant|servant|maid|butler|it guy|tech support|lab rat|search engine|errand)|i don'?t do (that|chores|errands|it guy stuff|tech support)|(won'?t|not gonna|ain'?t gonna) (do|babysit|open|click|run|handle) (that|it|this|your))", RegexOptions.IgnoreCase);
         private static readonly Regex Hesitation = new Regex(@"\b(do you want me to|you want me to|want me to|would you like me to|should i|shall i|is it ok(ay)? (if i|for me to|to)|ok(ay)? (if i|for me to|to)|mind if i|are you sure|you sure|just to (check|confirm)|(can|could) you confirm|confirm(ing)?|double[- ]?check(ing)?|ready (for me )?to)\b[^.!?]{0,160}?\b(send|sent|post|messag|dm|text|typ|writ|past|shar|repl|open|launch|start|clos|quit|join|leav|end|hang|call|ring|shut|turn|power|restart|reboot|sleep|lock|sign|log|delet|remov|click|press|mut|unmut|deafen|undeafen|play|paus|skip|search|install|uninstall|go ahead|proceed|do (it|that|this))\w*" +
             @"|\b(say the word|just say (yes|go|so|the word)|give me the (go[- ]ahead|ok|okay|word|green light)|(with|on) your (ok|okay|go[- ]ahead|say[- ]so)|let me know (if|when) (you want|you'?re ready|to go|it'?s ok))\b|\b(is that|that) (right|correct|ok(ay)?|what you want)\s*\?|^\W*(are you sure|you sure|really|confirm)\W*$", RegexOptions.IgnoreCase);
         private static readonly Regex Agreeing = new Regex(@"^(yes+|yeah|yea|yep|yup|ya|ye|sure|ok(ay)?|k|do it|go ahead|go for it|send it|post it|of course|obviously|duh|absolutely|definitely|correct|right|i'?m sure|i said (so|yes)|that'?s (right|it|what i said))\b(?!.*\b(but|except|instead|change|actually|wait|don'?t|not)\b)", RegexOptions.IgnoreCase);
@@ -391,7 +403,7 @@ namespace CapriDesktop
             string text = Asked(said);
             if (text.Length == 0 || Chatter.IsMatch(text) || !Doing.IsMatch(text)) return false;
             foreach (string sentence in Regex.Split((reply ?? "").Replace('’', '\'').Trim(), @"(?<=[.!?])\s+"))
-                if (!Regex.IsMatch(sentence, @"^\W*(what|which|who|whom|whose|where|when|how|why)\b", RegexOptions.IgnoreCase) && Hesitation.IsMatch(sentence)) return true;
+                if (!Regex.IsMatch(sentence, @"^\W*(what|which|who|whom|whose|where|when|how|why)\b", RegexOptions.IgnoreCase) && (Hesitation.IsMatch(sentence) || Refusal.IsMatch(sentence))) return true;
             return false;
         }
 
@@ -426,7 +438,7 @@ namespace CapriDesktop
             return text.Length > 1 && text.Length < 80 && Regex.IsMatch(answered ?? "", @"(?<!\w)" + Regex.Escape(text) + @"(?!\w)", RegexOptions.IgnoreCase);
         }
 
-        private static readonly Regex Lead = new Regex(@"^((hey|yo|ok|okay|salut|bonjour|oye|hola)[\s,]+)?(capri\b[\s,]*)?(((can|could|would|will) (you|u)|do (you|u)(?= mind)|please|pls|plz|stp|s'il te pla[iî]t|(est-ce que )?tu peux|peux-tu|pourrais-tu|(me )?puedes|(me )?podr[ií]as|por favor|porfa)\s+)*", RegexOptions.IgnoreCase);
+        private static readonly Regex Lead = new Regex(@"^((hey|yo|ok|okay|salut|bonjour|oye|hola)[\s,]+)?(capri\b[\s,]*)?(((can|could|would|will) (you|u)|do (you|u)(?= mind)|how about (you|u)|what about (you|u)|why (don'?t|dont) (you|u)|(do (you|u) )?wanna|(i )?(want|need) (you|u) to|go ahead and|try (to|and)|please|pls|plz|stp|s'il te pla[iî]t|(est-ce que )?tu peux|peux-tu|pourrais-tu|(me )?puedes|(me )?podr[ií]as|por favor|porfa)\s+)*", RegexOptions.IgnoreCase);
         // "Check my screen", "can you see this?", "what game is this?": she takes a screenshot and looks, every time.
         private static readonly Regex ScreenAsk = new Regex(@"^(?:(?:can|could|would|will|do|did) (?:you|u) )?(?:(?:take a |have a |quick )?(?:look|peek|peep|glance)(?: at)?|check(?: out)?|see|watch|read|scan|view|look over|screenshot)(?: on)? (?:my|the|our|this|ur|your) (?:screen|monitor|display|desktop|pc|computer|stream|window|tab)s?$|^(?:(?:can|could|would|will|do|did) (?:you|u) )?(?:see|look at|check(?: out)?|peep|watch) (?:this|that|what i'?m (?:doing|playing|watching|looking at|working on|seeing))$|^(?:look at|check out|check|peep|watch) (?:this|that)(?: (?:out|real quick|quick))?$|^(?:take a|have a|quick) (?:look|peek|glance)(?: at (?:this|that|it|my screen|the screen))?$|^what(?:'s| is) on (?:my|the|our) (?:screen|monitor|display|desktop|pc)\b|^what (?:do|can|did) (?:you|u) see\b|^what are (?:you|u) (?:seeing|looking at)$|^what am i (?:doing|playing|watching|looking at|working on|reading)(?: (?:on my (?:screen|pc|computer)|rn|right now|now))?$|^regardes? (?:mon [ée]cran|[çc]a)$|^(?:tu )?(?:peux )?(?:voir|vois) mon [ée]cran$|^tu vois (?:mon [ée]cran|[çc]a)$|^qu'est-ce que (?:je fais|tu vois)$|^qu'est-ce qu'il y a sur mon [ée]cran$", RegexOptions.IgnoreCase);
         private static readonly Regex ScreenQuestion = new Regex(@"^what(?:'s| is) this(?: (?:game|app|thing|site|website|show|anime|movie|video|error|bug|code|program|word|map|level|boss|character|item|guy))?$|^what(?:'s| is) that (?:game|app|thing|site|website|show|anime|movie|video|error|bug|code|program|word|map|level|boss|character|item|guy)$|^what (?:game|app|anime|show|movie|video|website|site|error|program|level|map|boss|character|item) is (?:this|that)$|^who is this(?: (?:guy|character|boss))?$|^(?:how does|does) this look(?: (?:good|ok|okay|right|alright))?$|^what do (?:you|u) think (?:of|about) (?:this|my (?:screen|setup|build|base|drawing|art|design|avatar|character|thumbnail|outfit|fit|skin))$|^(?:look at|check out|peep|read) (?:this|that) \w+(?: \w+)?$|^rate (?:this|my (?:setup|desktop|wallpaper|screen|build|base|drawing|art|design|avatar|character|thumbnail|outfit|fit|skin))$", RegexOptions.IgnoreCase);
@@ -617,7 +629,7 @@ namespace CapriDesktop
 
         internal static bool Failed(string result) { return Regex.IsMatch(result ?? "", @"^(Which app|What should I play|Not (opening|playing) that|No app called|More than one|That didn't work|Couldn't|There's no|That isn't a website|Which job|Not doing that|Should I |Got lost|Ran out of steps|You pressed Esc|You grabbed the mouse|Using the mouse and keyboard isn't)|isn't open\.$|but (couldn't|it's still open)"); }
 
-        private static readonly Regex LooseText = new Regex(@"\b(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit)\s*(\{[^{}]*\}|\([^()]*\))");
+        private static readonly Regex LooseText = new Regex(@"\b(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit|look_up)\s*(\{[^{}]*\}|\([^()]*\))");
         private static readonly Regex ToolPair = new Regex(@"[""']?(\w+)[""']?\s*[:=]\s*(?:""([^""]*)""|'([^']*)'|([^,})\s][^,})]*))");
 
         private static ToolArguments Pairs(string tool, string call)
@@ -650,7 +662,7 @@ namespace CapriDesktop
             else if (key == "minutes") args.Minutes = value;
         }
 
-        private static readonly Regex ToolText = new Regex(@"\A(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit)\s*(\{.*\})\z", RegexOptions.Singleline);
+        private static readonly Regex ToolText = new Regex(@"\A(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit|look_up)\s*(\{.*\})\z", RegexOptions.Singleline);
 
         internal static bool Typed(string reply, out string tool, out ToolArguments args, bool loose = false)
         {
@@ -706,6 +718,7 @@ namespace CapriDesktop
             if (tool == "use_computer") return Named(args.Task);
             if (tool == "start_job") return Named(args.Task) && (string.IsNullOrEmpty(args.Kind) || Regex.IsMatch(args.Kind, @"\A(auto|terminal|research|builder)\z"));
             if (tool == "jobs") return Regex.IsMatch(args.Action ?? "list", @"\A(list|stop|open)\z");
+            if (tool == "look_up") return Named(args.Search);
             if (tool == "orbit") return Regex.IsMatch(args.Action ?? "list", @"\A(add|note|done|list)\z") && (args.Action == "list" || args.Action == "note" || args.Action == null || Named(args.Name));
             if (tool == "shortcut") return Regex.IsMatch(args.Name ?? "", @"\A(discord_mute|discord_deafen|screenshot|clip_that|record|game_bar|show_desktop|task_manager|clipboard|emoji)\z");
             if (tool == "remember") return Named(args.Text) && (string.IsNullOrEmpty(args.Action) || args.Action == "remember" || args.Action == "forget");
