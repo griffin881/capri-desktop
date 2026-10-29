@@ -115,7 +115,7 @@ namespace CapriDesktop
     internal sealed class Agent : IDisposable
     {
         internal const double Pace = 15;
-        internal const int Version = 18;
+        internal const int Version = 19;
         private const string Patience = "\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45}";
         internal event Action<int> Opened;
         internal event Action<string> Heard;
@@ -129,6 +129,8 @@ namespace CapriDesktop
         private Thread worker;
         private volatile bool ready;
         internal Func<string, ToolArguments, string> Act;
+        // Her chat so far, sent with the call's opening so she picks up where they left off.
+        internal string Memory = "";
 
         internal static string Prompt { get { return Brain.Persona + Hands.Note + "\nYou are talking out loud on a live call. Banter stays short, one to three spoken sentences. When you're going off about something, or they ask you to explain or go deeper, take as long as it needs, still spoken: no lists, no headings, and never write tags in square brackets.\nIf they mention a person, an event or anything you don't know, or that might have changed since you last heard, call look_up first and answer from what you find. Never say you don't know who someone is.\nIf the user goes quiet, they're busy, gaming or muted: stay quiet until they talk to you. Never check in, ask if they're still there, beg them to talk or say they left you hanging.\nSo the voice says your slang right, always spell choom as chewm, preem as preme and yezzirrr as yessirrr. Say chewm rarely, at most once every few replies and never on its own."; } }
 
@@ -277,7 +279,7 @@ namespace CapriDesktop
                 ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
                 socket = new ClientWebSocket();
                 socket.ConnectAsync(new Uri(url), stop.Token).Wait();
-                Send("{\"type\":\"conversation_initiation_client_data\",\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":" + Voice.Quote(Prompt + Brain.Speech() + Brain.Remembered() + Brain.Lately()) + "}" + (Language != "en" ? ",\"language\":" + Voice.Quote(Language) : "") + "},\"tts\":{\"voice_id\":" + Voice.Quote(voiceId) + "}}}");
+                Send("{\"type\":\"conversation_initiation_client_data\",\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":" + Voice.Quote(Prompt + Brain.Speech() + Brain.Remembered() + Brain.Lately() + (Memory ?? "")) + "}" + (Language != "en" ? ",\"language\":" + Voice.Quote(Language) : "") + "},\"tts\":{\"voice_id\":" + Voice.Quote(voiceId) + "}}}");
                 byte[] buffer = new byte[65536];
                 using (MemoryStream message = new MemoryStream())
                     while (!stop.IsCancellationRequested)

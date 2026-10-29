@@ -517,6 +517,42 @@ namespace CapriDesktop
         // Her longer memory: the projects they're juggling and the last few lines of her diary.
         internal static string Lately() { return Orbits.Context() + Journal.Lately(); }
 
+        // Older talk that matches this message, typed or on a call, from as far back as her journal goes.
+        internal static string Recalled(string said)
+        {
+            string found;
+            try { found = Journal.Recall(said, 8); }
+            catch (Exception) { return ""; }
+            return found.Length == 0 ? "" : "\nThings you two said before that match this, with their dates. You remember all of it, like a person would: use it when it fits, bring back the thread, and never recite it or say you looked it up:\n" + found;
+        }
+
+        // Her chat so far, typed and on calls, for a call that's starting: the call carries straight on from it.
+        internal string Recap(int count = 30)
+        {
+            List<ChatMessage> last;
+            DateTime at;
+            lock (gate)
+            {
+                last = history.GetRange(Math.Max(0, history.Count - count), Math.Min(count, history.Count));
+                at = chattedAt;
+            }
+            List<string> lines = new List<string>();
+            foreach (ChatMessage message in last)
+            {
+                string content = Regex.Replace(message.Content ?? "", @"\s+", " ").Trim();
+                if (content.Length == 0) continue;
+                if (content.Length > 320) content = content.Substring(0, 317) + "...";
+                lines.Add((message.Role == "assistant" ? "you: " : "them: ") + content);
+            }
+            int size = 0;
+            int from = lines.Count;
+            while (from > 0 && size + lines[from - 1].Length < 6000) size += lines[--from].Length + 1;
+            if (from >= lines.Count) return "";
+            TimeSpan ago = DateTime.Now - at;
+            string when = ago.TotalMinutes < 2 ? "just now" : ago.TotalMinutes < 60 ? (int)ago.TotalMinutes + " minutes ago" : ago.TotalHours < 24 ? (int)ago.TotalHours + (ago.TotalHours < 2 ? " hour" : " hours") + " ago" : (int)ago.TotalDays + (ago.TotalDays < 2 ? " day" : " days") + " ago";
+            return "\nYour conversation with them so far, typed and on calls, oldest first; the last of it was " + when + ". This call carries straight on from it. You remember every word, like a person would: if it was recent, pick up right where you left off, never greet them like you're meeting fresh, and never recap it out loud.\n" + string.Join("\n", lines.GetRange(from, lines.Count - from).ToArray());
+        }
+
         // How her last replies started, so she starts this one some other way.
         private string Fresh()
         {
@@ -732,7 +768,7 @@ namespace CapriDesktop
             if (model == null) throw new BrainException(Offline);
             Func<string, ToolArguments, string> act = Act;
             List<ChatMessage> messages = new List<ChatMessage>();
-            messages.Add(new ChatMessage("system", Character + Remembered() + Lately() + Gap() + Fresh() + (act != null ? Hands.Chat : "") + Now()));
+            messages.Add(new ChatMessage("system", Character + Remembered() + Lately() + Recalled(text) + Gap() + Fresh() + (act != null ? Hands.Chat : "") + Now()));
             List<ChatMessage> recent;
             lock (gate)
             {

@@ -22,6 +22,75 @@ namespace CapriDesktop
         internal static string DaysPath { get { return Folder == null ? null : Path.Combine(Folder, "days.md"); } }
         private static string MarkPath { get { return Folder == null ? null : Path.Combine(Folder, "journal", "digested.txt"); } }
 
+        private static readonly HashSet<string> Common = new HashSet<string>(("about above after again also always another anything anyway around because been before being below between both cause could didn doesn doing done down during each even every everything from gonna gotta have having here into just know like lmao lol make many maybe more most much must need never nothing okay only other over pretty really right said same says should since some something still such sure take than that thats their them then there these they thing things think this those though thought through today told tomorrow very want wanna was well were what whats when where which while will with without would yeah your youre capri choom the and you are for but not was can get got she her his him how why who did had has its our out one all any now yes idk too way day see say man bro lot off own put try use let yet ago new old big bit few far who'd i'm i've ill ive dont cant wont isnt aint lmk rn tho imo fr ngl tbh omg wtf hey yep nah").Split(' '));
+
+        // Older talk that matches what they just said, from every day she's kept, newest first. It's how she remembers
+        // things from weeks ago that no longer fit in her chat window. Today's newest lines are skipped: those are in the chat itself.
+        internal static string Recall(string said, int max, int skipToday = 40)
+        {
+            string dir = JournalDir;
+            if (dir == null || max <= 0 || string.IsNullOrWhiteSpace(said)) return "";
+            List<string> words = new List<string>();
+            foreach (Match word in Regex.Matches(said.ToLowerInvariant().Replace('\u2019', '\''), @"[\p{L}\p{N}][\p{L}\p{N}'-]{2,}"))
+            {
+                string w = word.Value.Trim('\'', '-');
+                if (w.EndsWith("'s", StringComparison.Ordinal)) w = w.Substring(0, w.Length - 2);
+                if (w.Length >= 3 && !Common.Contains(w) && !words.Contains(w)) words.Add(w);
+                if (words.Count >= 12) break;
+            }
+            if (words.Count == 0) return "";
+            List<Regex> finds = new List<Regex>();
+            foreach (string w in words) finds.Add(new Regex(@"(?<![\p{L}\p{N}])" + Regex.Escape(w) + @"(?:s|es|d|ed|ing)?(?![\p{L}\p{N}])", RegexOptions.IgnoreCase));
+            // A short ask needs one strong word to match; a longer one needs two, so a single common-ish word doesn't drag up everything.
+            int need = words.Count <= 3 ? 1 : 2;
+            string[] files;
+            try { if (!Directory.Exists(dir)) return ""; files = Directory.GetFiles(dir, "????-??-??.md"); }
+            catch (IOException) { return ""; }
+            catch (UnauthorizedAccessException) { return ""; }
+            Array.Sort(files, StringComparer.Ordinal);
+            Array.Reverse(files);
+            string today = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            List<KeyValuePair<int, string>> found = new List<KeyValuePair<int, string>>();
+            int order = 0;
+            for (int f = 0; f < files.Length && f < 400; f++)
+            {
+                string day = Path.GetFileNameWithoutExtension(files[f]);
+                string[] lines;
+                lock (gate)
+                {
+                    try { lines = File.ReadAllLines(files[f]); }
+                    catch (IOException) { continue; }
+                    catch (UnauthorizedAccessException) { continue; }
+                }
+                int end = day == today ? Math.Max(0, lines.Length - skipToday) : lines.Length;
+                for (int i = end - 1; i >= 0; i--)
+                {
+                    string line = lines[i];
+                    if (line.Length < 8) continue;
+                    int score = 0;
+                    foreach (Regex find in finds) if (find.IsMatch(line)) score++;
+                    if (score < need) continue;
+                    string shown = day + " " + (line.Length > 300 ? line.Substring(0, 297) + "..." : line);
+                    // Their line comes with her answer to it, so the memory reads as an exchange.
+                    if (Regex.IsMatch(line, @"^\d\d:\d\d them: ") && i + 1 < end && Regex.IsMatch(lines[i + 1], @"^\d\d:\d\d Capri: "))
+                        shown += "\n" + day + " " + (lines[i + 1].Length > 300 ? lines[i + 1].Substring(0, 297) + "..." : lines[i + 1]);
+                    found.Add(new KeyValuePair<int, string>(score * 100000 - order++, shown));
+                }
+            }
+            found.Sort(delegate(KeyValuePair<int, string> a, KeyValuePair<int, string> b) { return b.Key.CompareTo(a.Key); });
+            List<string> picked = new List<string>();
+            int used = 0;
+            foreach (KeyValuePair<int, string> hit in found)
+            {
+                if (picked.Count >= max || used + hit.Value.Length > 2400) break;
+                if (picked.Contains(hit.Value)) continue;
+                picked.Add(hit.Value);
+                used += hit.Value.Length;
+            }
+            picked.Sort(StringComparer.Ordinal);
+            return string.Join("\n", picked.ToArray());
+        }
+
         // The last few lines of today's talk, so a job or a new call knows what "that download" means.
         internal static string Recent(int count)
         {
@@ -65,7 +134,7 @@ namespace CapriDesktop
             foreach (string file in Directory.GetFiles(dir, "????-??-??.md"))
             {
                 DateTime day;
-                if (DateTime.TryParseExact(Path.GetFileNameWithoutExtension(file), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out day) && (DateTime.Now - day).TotalDays > 60)
+                if (DateTime.TryParseExact(Path.GetFileNameWithoutExtension(file), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out day) && (DateTime.Now - day).TotalDays > 3650)
                     try { File.Delete(file); } catch (IOException) { }
             }
         }
@@ -160,7 +229,7 @@ namespace CapriDesktop
             catch (UnauthorizedAccessException) { return ""; }
             List<string> kept = new List<string>();
             foreach (string line in lines) if (line.StartsWith("- ", StringComparison.Ordinal)) kept.Add(line.Length > 260 ? line.Substring(0, 260) : line);
-            int from = Math.Max(0, kept.Count - 6);
+            int from = Math.Max(0, kept.Count - 10);
             return kept.Count == 0 ? "" : "\nWhat's been going on lately, from your diary (days.md). Bring it up when it fits, like asking how something went; don't recite it:\n" + string.Join("\n", kept.GetRange(from, kept.Count - from).ToArray());
         }
     }

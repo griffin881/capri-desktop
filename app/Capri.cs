@@ -4835,6 +4835,7 @@ namespace CapriDesktop
         {
             Agent opened = new Agent();
             opened.Language = language;
+            if (!testing) opened.Memory = brain.Recap();
             opened.Act = delegate(string tool, ToolArguments args)
             {
                 stirred = Environment.TickCount;
@@ -4988,6 +4989,16 @@ namespace CapriDesktop
             string blocked = Safety.Stops(text);
             if (blocked == null) Brain.Learn(text);
             callHeard = blocked == null ? text : null;
+            // Older talk that matches what they just said goes to her quietly, so on a call she remembers weeks back too.
+            if (blocked == null && !testing)
+            {
+                Agent hearing = agent;
+                ThreadPool.QueueUserWorkItem(delegate
+                {
+                    string older = Brain.Recalled(text);
+                    if (older.Length > 0 && hearing != null) hearing.Tell(older.TrimStart('\n'));
+                });
+            }
             dropping = blocked != null;
             if (blocked != null) { speaker.Clear(); Begin(ticket, blocked, TalkState.Talking, null); return; }
             string tool;
