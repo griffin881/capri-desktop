@@ -186,6 +186,8 @@ namespace CapriDesktop
         [DataMember] public bool Bypass;
         // "Hey Capri" is on unless turned off, so a missing value means on.
         [DataMember] public bool NoWake;
+        [DataMember] public string OverseerLink;
+        [DataMember] public string OpenCodeModel;
 
         [OnDeserializing]
         private void Defaults(StreamingContext context)
@@ -607,6 +609,10 @@ namespace CapriDesktop
         private bool lifeDragged;
         private WakeWord wakeWord;
         private ToolStripMenuItem wakeItem;
+        private Crew crew;
+        private CrewWindow crewWindow;
+        private readonly System.Collections.Generic.Queue<string> crewLines = new System.Collections.Generic.Queue<string>();
+        private double crewQuietSince = -1;
         private Ledge seat;
         private bool falling;
         private Ledge fallTo;
@@ -846,6 +852,18 @@ namespace CapriDesktop
             engine = new Engine(data);
             kokoro = new LocalVoice(data);
             parakeet = new LocalEars(data);
+            crew = new Crew(data);
+            crew.Hire = HireCrew;
+            crew.Overseer = OverseerBrain;
+            crew.Speak = delegate(string line) { Post(delegate { crewLines.Enqueue(line); }); };
+            crew.Changed = delegate { Post(delegate { if (crewWindow != null && !crewWindow.IsDisposed && crewWindow.Visible) crewWindow.Reload(); }); };
+            crew.Blackwall = delegate { return preferences.Bypass; };
+            crew.OpenCodeModel = delegate { return preferences.OpenCodeModel; };
+            Hands.Crew = delegate(string tool, ToolArguments args)
+            {
+                if (tool == "jobs" && args != null && args.Action == "open") { Post(ShowCrew); return "Opened your jobs board."; }
+                return crew.Handle(tool, args);
+            };
             presence = new Presence(Assembly.GetExecutingAssembly().GetName().Version.ToString(3));
             preferences = smoke ? new Preferences() : LoadPreferences();
             ears.Chosen = preferences.Mic;
@@ -887,6 +905,7 @@ namespace CapriDesktop
             menu.Items.Add(visibilityItem);
             wakeItem = new ToolStripMenuItem(WakeLabel(), null, delegate { ToggleWakeWord(); });
             menu.Items.Add(wakeItem);
+            menu.Items.Add(new ToolStripMenuItem("Jobs", null, delegate { ShowCrew(); }));
             ToolStripMenuItem sizes = new ToolStripMenuItem("Size");
             AddSize(sizes, "Small", 170);
             AddSize(sizes, "Medium", 240);
@@ -1092,6 +1111,7 @@ namespace CapriDesktop
             if (walking) Walk(now);
             if (!riding && !dragging && !walking && !falling && outro == null && clip != arrive && clip != leave) Face();
             UpdateLife(now);
+            PumpCrew(now);
             RenderFrame();
             if (!riding && !dragging && !walking && outro == null && !preferences.Motion && clip == idle && speech == null && talkState == TalkState.Off) frames.Stop();
         }
@@ -1137,6 +1157,67 @@ namespace CapriDesktop
             WakeWord closing = wakeWord;
             wakeWord = null;
             if (closing != null) closing.Dispose();
+        }
+
+        // ---- her crew -------------------------------------------------------------------------------------
+
+        // A brain wired like hers, of its own, so a job's requests never get cut off when they talk to her.
+        private Brain HireCrew()
+        {
+            Brain hired = new Brain();
+            Cloud remote = brain.Remote;
+            hired.Remote = remote == null ? null : new Cloud(remote.Key, remote.Model);
+            hired.Local = brain.Local;
+            hired.LocalPick = brain.LocalPick;
+            hired.Model = brain.Model;
+            return hired;
+        }
+
+        // The overseer: a server link or key they gave on the jobs board, else nobody and the worker's brain checks itself.
+        private Brain OverseerBrain()
+        {
+            string link = Voice.Unprotect(preferences.OverseerLink);
+            if (string.IsNullOrWhiteSpace(link) || Cloud.KindOf(link) == null) return null;
+            string kind = Cloud.KindOf(link);
+            string model = Brain.DefaultCloudModel(kind, Brain.CloudModels(link));
+            if (model == null) return null;
+            Brain judge = new Brain();
+            judge.Remote = new Cloud(link, model);
+            judge.Model = model;
+            return judge;
+        }
+
+        private void ShowCrew()
+        {
+            if (crewWindow == null || crewWindow.IsDisposed)
+            {
+                crewWindow = new CrewWindow(crew, tray.Icon);
+                crewWindow.SaveOverseer = delegate(string link) { preferences.OverseerLink = string.IsNullOrWhiteSpace(link) ? null : Voice.Protect(link.Trim()); SavePreferences(); };
+                crewWindow.SaveModel = delegate(string model) { preferences.OpenCodeModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim(); SavePreferences(); };
+                crewWindow.OverseerTail = delegate { string link = Voice.Unprotect(preferences.OverseerLink); return string.IsNullOrEmpty(link) ? null : Cloud.KindOf(link) == "custom" ? Cloud.HostOf(link) : "key ending " + Voice.Tail(link); };
+                crewWindow.ModelText = preferences.OpenCodeModel;
+            }
+            crewWindow.Reload();
+            crewWindow.Show();
+            crewWindow.Activate();
+        }
+
+        // Her crew's plans and reports come out of her mouth, once she's free and has had a breath.
+        private void PumpCrew(double now)
+        {
+            if (crewLines.Count == 0 || testing) return;
+            bool free = (talkState == TalkState.Off || talkState == TalkState.Dormant) && !dragging && outro == null;
+            if (!free) { crewQuietSince = -1; return; }
+            if (crewQuietSince < 0) { crewQuietSince = now; return; }
+            if (now - crewQuietSince < 1.5) return;
+            crewQuietSince = -1;
+            string line = crewLines.Dequeue();
+            if (hidden) SetHidden(false);
+            heard = "(crew)";
+            box.Prompt = "> crew: ";
+            int ticket = ++asking;
+            Answer(ticket, line, TalkState.Talking);
+            brain.Remember("(your crew reported in)", line);
         }
 
         // She heard her name: glitch awake and open voice chat.
@@ -6752,13 +6833,13 @@ namespace CapriDesktop
                             Play(idle);
                             if (!cornered) throw new Exception("She can't sit in the bottom corner: " + perched + " in " + corner);
                             checks.Add("PASS screen bounds: her body, not her see-through window, stays on screen, so she stands and sits right in the corners");
-                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[5]).DropDownItems[0]).PerformClick();
+                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[6]).DropDownItems[0]).PerformClick();
                             if (Width != 242) throw new Exception("Small size failed.");
-                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[5]).DropDownItems[1]).PerformClick();
+                            ((ToolStripMenuItem)((ToolStripMenuItem)menu.Items[6]).DropDownItems[1]).PerformClick();
                             checks.Add("PASS size menu");
                             string[] tops = new string[menu.Items.Count];
                             for (int i = 0; i < tops.Length; i++) tops[i] = menu.Items[i].Text;
-                            if (string.Join(",", tops) != "CAPRI  /  " + Assembly.GetExecutingAssembly().GetName().Version.ToString(3) + ",,Open Capri Mainframe,Hide Capri,\"Hey Capri\": on,Size,Move,Help,,Quit Capri") throw new Exception("The right-click menu is not the short one: " + string.Join(",", tops));
+                            if (string.Join(",", tops) != "CAPRI  /  " + Assembly.GetExecutingAssembly().GetName().Version.ToString(3) + ",,Open Capri Mainframe,Hide Capri,\"Hey Capri\": on,Jobs,Size,Move,Help,,Quit Capri") throw new Exception("The right-click menu is not the short one: " + string.Join(",", tops));
                             bool hiddenWas = hidden, popsWere = preferences.CheckIns;
                             Point popFrom = anchor;
                             Ledge popSeat = seat;

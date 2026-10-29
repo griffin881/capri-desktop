@@ -37,6 +37,15 @@ jobs:
         with:
           name: Capri-Setup
           path: out/windows/Capri-Setup.exe
+      - name: Crew test
+        shell: pwsh
+        run: |
+          $failed = $false
+          try { ./ci/crew-test.ps1 *>&1 | Tee-Object -FilePath crew.log } catch { $failed = $true; $_ | Out-String | Add-Content crew.log }
+          if ($failed) {
+            Get-Content crew.log | Where-Object { $_ -match 'FAIL|error|Exception|failed' } | Select-Object -First 30 | ForEach-Object { Write-Host ('::error::' + ($_ -replace '[\r\n%]', ' ')) }
+            exit 1
+          }
 
   linux:
     runs-on: ubuntu-24.04

@@ -903,7 +903,16 @@ namespace CapriDesktop
             }
         }
 
-        internal string Step(string system, string user, string tools, string claudeTools, string listing, List<KeyValuePair<string, ToolArguments>> calls)
+        // A one-off question with no tools and no chat history, like her crew planning or checking a job.
+        internal string Consult(string system, string user, int limit)
+        {
+            string model = Model;
+            if (model == null) throw new BrainException(Offline);
+            List<ChatMessage> messages = new List<ChatMessage> { new ChatMessage("system", system), new ChatMessage("user", user) };
+            return Think(model, messages, false, new List<KeyValuePair<string, ToolArguments>>(), null, limit, -1);
+        }
+
+        internal string Step(string system, string user, string tools, string claudeTools, string listing, List<KeyValuePair<string, ToolArguments>> calls, int limit = 400)
         {
             int ticket;
             lock (gate) ticket = cancelled;
@@ -914,7 +923,7 @@ namespace CapriDesktop
             List<ChatMessage> messages = new List<ChatMessage> { new ChatMessage("system", system), new ChatMessage("user", user) };
             if (toolless != source)
             {
-                try { return Think(model, messages, true, calls, null, 400, ticket, false, tools, claudeTools); }
+                try { return Think(model, messages, true, calls, null, limit, ticket, false, tools, claudeTools); }
                 catch (BrainException error)
                 {
                     if (!Regex.IsMatch(error.Message, @"does not support tools|tools? (are |is )?(not supported|unsupported)|doesn't support tools", RegexOptions.IgnoreCase)) throw;
@@ -922,7 +931,7 @@ namespace CapriDesktop
                 }
             }
             messages[0] = new ChatMessage("system", system + listing);
-            return Think(model, messages, false, calls, null, 400, ticket);
+            return Think(model, messages, false, calls, null, limit, ticket);
         }
 
         private string Think(string model, List<ChatMessage> messages, bool tools, List<KeyValuePair<string, ToolArguments>> calls, string parts = null, int limit = 90, int ticket = -1, bool routing = false, string openAiTools = null, string claudeTools = null)
