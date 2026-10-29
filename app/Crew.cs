@@ -32,6 +32,8 @@ namespace CapriDesktop
         [DataMember] public string Review;
         [DataMember] public string Report;
         [DataMember] public string Mind;
+        // What they two were just talking about, so "that download" means the one they meant.
+        [DataMember] public string Context;
         internal volatile bool Stop;
         internal volatile Process Running;
         internal bool Finished { get { return Status == "done" || Status == "failed" || Status == "stopped"; } }
@@ -68,6 +70,8 @@ namespace CapriDesktop
         internal Action Changed;
         internal Func<bool> Blackwall = delegate { return false; };
         internal Func<string> OpenCodeModel = delegate { return null; };
+        // The last few lines of their talk, read when a job starts.
+        internal Func<string> Context = delegate { return null; };
 
         internal const int MaxSteps = 16;
         private readonly string bookPath;
@@ -105,6 +109,7 @@ namespace CapriDesktop
             string blocked = Safety.Stops(ask);
             if (blocked != null) return blocked;
             Gig gig = new Gig { Ask = ask, Title = Shorten(ask), Worker = Pick(kind, ask), Status = "planning", Started = Now(), Log = new List<string>() };
+            try { string talk = Context(); if (!string.IsNullOrWhiteSpace(talk)) gig.Context = Tail(talk.Trim(), 2500); } catch (Exception) { }
             lock (gate) { gig.Id = (next++).ToString(CultureInfo.InvariantCulture); gigs.Add(gig); while (gigs.Count > 40) gigs.RemoveAt(0); }
             gig.Folder = FolderFor(gig, target);
             Save();
@@ -208,18 +213,19 @@ namespace CapriDesktop
         }
 
         private const string PlanPrompt =
-            "You plan jobs for Capri's crew. Capri is a playful, teasing desktop companion living on the user's Windows PC, and her crew does the bigger jobs in the background.\n" +
+            "You plan jobs for Capri's crew. Capri is a cocky, fiery desktop companion and the user's partner, living on their Windows PC, and her crew does the bigger jobs in the background.\n" +
             "Workers:\n" +
             "- terminal: runs PowerShell on their PC. Installs, setups, downloads, models, Kaggle, git, moving or making files, checking things.\n" +
             "- research: searches the web and reads pages, then writes up notes.\n" +
             "- builder: OpenCode, a coding agent that writes and edits code in a project folder.\n" +
             "Reply with only JSON, no other text: {\"title\": \"a short name for the job, 2 to 5 words\", \"worker\": \"terminal|research|builder\", \"plan\": \"what Capri says out loud about the plan\"}.\n" +
+            "Use the talk around the job to work out what they really meant (which thing, where), and plan for that.\n" +
             "The plan is Capri talking to them, casual and in first person, one or two sentences: what she's putting which worker on and how it'll go, and which brain is doing the thinking. " +
             "Talk like a friend, not an assistant: no lists, no step numbers, no 'I will now', no 'Certainly', no 'Here's the plan'. Vary how you start it.";
 
         private void PlanIt(Gig gig, Brain brain)
         {
-            string user = "Their job: " + Voice.Quote(gig.Ask) + "\nWorker that looks right: " + gig.Worker + (HasOpenCode ? "" : " (OpenCode isn't installed, so no builder)") +
+            string user = "Their job: " + Asked(gig) + "\nWorker that looks right: " + gig.Worker + (HasOpenCode ? "" : " (OpenCode isn't installed, so no builder)") +
                 "\nBrain doing the thinking: " + gig.Mind + "\nJob folder: " + gig.Folder;
             GigPlan plan = null;
             try { plan = ParseJson<GigPlan>(brain.Consult(PlanPrompt, user, 300)); }
@@ -245,6 +251,7 @@ namespace CapriDesktop
             "Prefer winget for installing apps, with --silent --accept-source-agreements --accept-package-agreements. Nothing can wait for typing: never use Read-Host, pause, or anything that opens a prompt; pass yes, silent or force flags instead.\n" +
             "Don't delete or overwrite their files unless the job says to, and leave system settings, the registry, drivers and disks alone unless the job is about them.\n" +
             "If something needs them, like signing in, a password, an API key, a payment or a click in a browser, stop and call finish with action failed and say exactly what they need to do.\n" +
+            "Jobs are often short, like \"download DeepSeek\": read what you two were just talking about to work out what they meant, like which model, which site or which machine (a job about a Kaggle notebook happens on Kaggle, through the kaggle command, not on this PC). Don't install some other app just because its name matches. If it's still unclear what they want, don't guess: call finish with action failed and ask them the one question that settles it.\n" +
             "Check your work before you finish, like running the program's --version or listing the files. Then call finish with action done and what you did, what they need to know and where things are, in plain words.";
 
         private void Terminal(Gig gig, Brain brain, string notes)
@@ -526,7 +533,7 @@ namespace CapriDesktop
         private void Build(Gig gig, string notes)
         {
             Directory.CreateDirectory(gig.Folder);
-            string prompt = gig.Ask + "\n\nPlan: " + gig.Plan + (string.IsNullOrEmpty(notes) ? "" : "\n\nA reviewer checked your last attempt and said: " + notes) +
+            string prompt = gig.Ask + (string.IsNullOrEmpty(gig.Context) ? "" : "\n\nWhat we were just talking about, for context:\n" + gig.Context) + "\n\nPlan: " + gig.Plan + (string.IsNullOrEmpty(notes) ? "" : "\n\nA reviewer checked your last attempt and said: " + notes) +
                 "\n\nWork in this folder. When you're done, finish with a short summary of what you built or changed, and how to run or use it.";
             string model = OpenCodeModel();
             string command = "opencode run --auto --dir " + Quote(gig.Folder) + " --title " + Quote(gig.Title) + (string.IsNullOrWhiteSpace(model) ? "" : " --model " + Quote(model.Trim())) + " " + Quote(prompt);
@@ -543,8 +550,9 @@ namespace CapriDesktop
         private const string OversightPrompt =
             "You are the overseer of Capri's crew. A worker just finished a job on the user's PC. Check the work against what they asked: did it really get done, and is anything wrong, missing or risky? Don't trust the worker's own word: look at the commands, outputs and results.\n" +
             "Reply with only JSON, no other text: {\"verdict\": \"pass|retry|fail\", \"notes\": \"what's wrong or missing, for the worker if it tries again\", \"report\": \"what Capri tells the user out loud\"}.\n" +
+            "Judge it against what they meant, using the talk around the job: if the worker did something else, like finding a different app or reporting what they obviously already have, it didn't get done.\n" +
             "Use retry only when the same worker trying again would likely fix it. Use fail when it needs the user (a sign-in, a key, a decision) or can't be done.\n" +
-            "The report is Capri, a playful, teasing friend, talking to them: one to three casual sentences saying what got done, anything they need to do, and where the results are. Plain words, no lists, no corporate phrases, and don't start with 'So,' or 'Alright,' every time.";
+            "The report is Capri, their partner, talking to them in her own cocky voice: one to three casual sentences saying what got done, anything they need to do, and where the results are. Plain words, no lists, no corporate phrases, and don't start with 'So,' or 'Alright,' every time.";
 
         private GigVerdict Oversee(Gig gig, Brain worker)
         {
@@ -553,7 +561,7 @@ namespace CapriDesktop
             if (judge != null) Note(gig, "Overseer: " + MindName(judge));
             List<string> log = new List<string>(LogLines(gig));
             int from = Math.Max(0, log.Count - 30);
-            string user = "They asked: " + Voice.Quote(gig.Ask) + "\nPlan: " + gig.Plan + "\nWorker: " + gig.Worker + "\nJob folder: " + gig.Folder +
+            string user = "They asked: " + Asked(gig) + "\nPlan: " + gig.Plan + "\nWorker: " + gig.Worker + "\nJob folder: " + gig.Folder +
                 "\nWhat the worker did:\n" + string.Join("\n", log.GetRange(from, log.Count - from).ToArray()) + "\n\nThe worker's result:\n" + Trim(gig.Result ?? "(none)", 3500);
             GigVerdict verdict = null;
             foreach (Brain brain in new[] { judge, worker })
@@ -626,9 +634,15 @@ namespace CapriDesktop
 
         // ---- shared bits -----------------------------------------------------------------------------------
 
+        // The job as they asked it, plus the talk around it: the ask can be as short as "download DeepSeek" when they'd just said where.
+        private static string Asked(Gig gig)
+        {
+            return Voice.Quote(gig.Ask) + (string.IsNullOrEmpty(gig.Context) ? "" : "\nWhat you and they were just talking about, oldest first (use it to work out what they meant, like which download or where):\n" + gig.Context);
+        }
+
         private static string Brief(Gig gig, string notes, List<string> steps, int full = 5, int room = 6500)
         {
-            StringBuilder text = new StringBuilder("Job: " + Voice.Quote(gig.Ask) + "\nPlan: " + gig.Plan + "\nJob folder: " + gig.Folder);
+            StringBuilder text = new StringBuilder("Job: " + Asked(gig) + "\nPlan: " + gig.Plan + "\nJob folder: " + gig.Folder);
             if (!string.IsNullOrEmpty(notes)) text.Append("\nThe overseer checked your last try and said: " + notes);
             if (steps.Count > 0)
             {

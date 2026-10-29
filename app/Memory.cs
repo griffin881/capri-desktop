@@ -22,6 +22,25 @@ namespace CapriDesktop
         internal static string DaysPath { get { return Folder == null ? null : Path.Combine(Folder, "days.md"); } }
         private static string MarkPath { get { return Folder == null ? null : Path.Combine(Folder, "journal", "digested.txt"); } }
 
+        // The last few lines of today's talk, so a job or a new call knows what "that download" means.
+        internal static string Recent(int count)
+        {
+            string dir = JournalDir;
+            if (dir == null || count <= 0) return "";
+            string path = Path.Combine(dir, DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".md");
+            string[] lines;
+            lock (gate)
+            {
+                try { if (!File.Exists(path)) return ""; lines = File.ReadAllLines(path); }
+                catch (IOException) { return ""; }
+                catch (UnauthorizedAccessException) { return ""; }
+            }
+            List<string> kept = new List<string>();
+            for (int i = lines.Length - 1; i >= 0 && kept.Count < count; i--)
+                if (lines[i].Trim().Length > 0) kept.Insert(0, lines[i].Length > 400 ? lines[i].Substring(0, 397) + "..." : lines[i]);
+            return string.Join("\n", kept.ToArray());
+        }
+
         internal static void Add(string who, string text)
         {
             string dir = JournalDir;

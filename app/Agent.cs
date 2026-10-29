@@ -87,6 +87,26 @@ namespace CapriDesktop
     }
 
     [DataContract]
+    internal sealed class AgentBrains
+    {
+        [DataMember(Name = "llms")] public AgentBrain[] Llms;
+    }
+
+    [DataContract]
+    internal sealed class AgentBrain
+    {
+        [DataMember(Name = "llm")] public string Id;
+        [DataMember(Name = "deprecation_info")] public AgentBrainAge Age;
+    }
+
+    [DataContract]
+    internal sealed class AgentBrainAge
+    {
+        [DataMember(Name = "is_deprecated")] public bool Deprecated;
+        [DataMember(Name = "is_in_fallback_period")] public bool Fading;
+    }
+
+    [DataContract]
     internal sealed class AgentPing
     {
         [DataMember(Name = "event_id")] public long Id;
@@ -95,7 +115,7 @@ namespace CapriDesktop
     internal sealed class Agent : IDisposable
     {
         internal const double Pace = 15;
-        internal const int Version = 16;
+        internal const int Version = 17;
         private const string Patience = "\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45}";
         internal event Action<int> Opened;
         internal event Action<string> Heard;
@@ -110,7 +130,7 @@ namespace CapriDesktop
         private volatile bool ready;
         internal Func<string, ToolArguments, string> Act;
 
-        internal static string Prompt { get { return Brain.Persona + Hands.Note + "\nYou are talking out loud in a live voice chat: keep every reply to one or two short spoken sentences, and never write tags in square brackets.\nIf the user goes quiet, they're busy, gaming or muted: stay quiet until they talk to you. Never check in, ask if they're still there, beg them to talk or say they left you hanging.\nSo the voice says your slang right, always spell choom as chewm, preem as preme and yezzirrr as yessirrr. Say chewm rarely, at most once every few replies and never on its own."; } }
+        internal static string Prompt { get { return Brain.Persona + Hands.Note + "\nYou are talking out loud on a live call. Banter stays short, one to three spoken sentences. When you're going off about something, or they ask you to explain or go deeper, take as long as it needs, still spoken: no lists, no headings, and never write tags in square brackets.\nIf they mention a person, an event or anything you don't know, or that might have changed since you last heard, call look_up first and answer from what you find. Never say you don't know who someone is.\nIf the user goes quiet, they're busy, gaming or muted: stay quiet until they talk to you. Never check in, ask if they're still there, beg them to talk or say they left you hanging.\nSo the voice says your slang right, always spell choom as chewm, preem as preme and yezzirrr as yessirrr. Say chewm rarely, at most once every few replies and never on its own."; } }
 
         // ElevenLabs keeps its own copy of her prompt, so her agent is tuned again after an update or when personality.md changes.
         internal static bool Stale(int version, string personality) { return version < Version || (personality ?? "") != Brain.PersonalityStamp; }
@@ -135,7 +155,41 @@ namespace CapriDesktop
             Voice.Send(Voice.Open("/v1/convai/agents/" + Uri.EscapeDataString(agentId), key, "PATCH"), Encoding.UTF8.GetBytes("{\"conversation_config\":{" + Patience + ",\"agent\":{" + Brains(key) + "}}}"));
         }
 
-        private static string Brains(string key) { return "\"prompt\":{\"prompt\":" + Voice.Quote(Prompt) + ",\"llm\":\"gemini-2.5-flash\",\"tool_ids\":" + ToolIds(key) + "}"; }
+        private static string Brains(string key) { return "\"prompt\":{\"prompt\":" + Voice.Quote(Prompt) + ",\"llm\":" + Voice.Quote(Mind(key)) + ",\"tool_ids\":" + ToolIds(key) + "}"; }
+
+        internal const string OldMind = "gemini-2.5-flash";
+
+        // Calls run on a brain ElevenLabs hosts. She takes the newest Claude Sonnet it offers (it plays a character best and knows recent news),
+        // then the newest Gemini Flash, then GPT, and falls back to the old Gemini if the list can't be read.
+        internal static string Mind(string key)
+        {
+            try { return Best(Voice.Reply<AgentBrains>(Voice.Send(Voice.Open("/v1/convai/llm/list", key, "GET"), null), "/v1/convai/llm/list")); }
+            catch (VoiceException) { return OldMind; }
+            catch (SerializationException) { return OldMind; }
+            catch (WebException) { return OldMind; }
+        }
+
+        internal static string Best(AgentBrains list)
+        {
+            string[] families = { @"^claude-sonnet-(\d+)(?:[-.](\d{1,2}))?(?:[-@]\d{8}|-latest)?$", @"^gemini-(\d+)(?:\.(\d+))?-flash(?:-preview)?(?:-\d{2}-\d{4})?$", @"^gpt-(\d+)(?:\.(\d+))?(?:-\d{4}-\d{2}-\d{2})?$" };
+            if (list == null || list.Llms == null) return OldMind;
+            foreach (string family in families)
+            {
+                string best = null;
+                double score = -1;
+                foreach (AgentBrain brain in list.Llms)
+                {
+                    if (brain == null || brain.Id == null || (brain.Age != null && (brain.Age.Deprecated || brain.Age.Fading))) continue;
+                    System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(brain.Id, family);
+                    if (!match.Success) continue;
+                    // A plain name beats a dated copy of the same model.
+                    double value = int.Parse(match.Groups[1].Value) * 100 + (match.Groups[2].Success ? int.Parse(match.Groups[2].Value) : 0) - (System.Text.RegularExpressions.Regex.IsMatch(brain.Id, @"\d{4}") ? 0.5 : 0);
+                    if (value > score) { score = value; best = brain.Id; }
+                }
+                if (best != null) return best;
+            }
+            return OldMind;
+        }
 
         private static string ToolIds(string key)
         {

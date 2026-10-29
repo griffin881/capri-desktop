@@ -710,6 +710,8 @@ namespace CapriDesktop
         internal bool SettingUp;
         private TalkState talkState;
         private string heard;
+        // What they last said on a call, kept until her answer so the pair goes in her memory.
+        private volatile string callHeard;
         private string reply;
         private double replyStart;
         private double replyDone = -1;
@@ -868,6 +870,7 @@ namespace CapriDesktop
             crew.Changed = delegate { Post(delegate { if (crewWindow != null && !crewWindow.IsDisposed && crewWindow.Visible) crewWindow.Reload(); }); };
             crew.Blackwall = delegate { return preferences.Bypass; };
             crew.OpenCodeModel = delegate { return preferences.OpenCodeModel; };
+            crew.Context = delegate { string said = callHeard; return Journal.Recent(14) + (chatting && !string.IsNullOrEmpty(said) ? "\n" + DateTime.Now.ToString("HH:mm") + " them (on the call, just now): " + said : ""); };
             if (!testing) { Hands.LookUp = Crew.LookUp; Hands.Answers = true; }
             Hands.Crew = delegate(string tool, ToolArguments args)
             {
@@ -4984,6 +4987,7 @@ namespace CapriDesktop
             box.Prompt = "> you: ";
             string blocked = Safety.Stops(text);
             if (blocked == null) Brain.Learn(text);
+            callHeard = blocked == null ? text : null;
             dropping = blocked != null;
             if (blocked != null) { speaker.Clear(); Begin(ticket, blocked, TalkState.Talking, null); return; }
             string tool;
@@ -5036,6 +5040,10 @@ namespace CapriDesktop
                 if (!string.IsNullOrEmpty(ran)) said = Did(new System.Collections.Generic.List<string> { ran });
             }
             said = Computer.Mask(said);
+            // Calls go in her memory like typed chat, so she remembers them later and her crew knows what was said.
+            string asked = callHeard;
+            callHeard = null;
+            if (!testing && said.Length > 0) brain.Remember(asked ?? "(still on the call)", said);
             string promised = null;
             lock (shortcutGate) if (!toolAsked && heardLast != null && Hands.Promised(said)) { promised = heardLast; heardLast = null; }
             if (promised != null) { string missed = said; ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(4000); lock (shortcutGate) if (toolAsked) return; Brain.Log("https://api.elevenlabs.io/v1/convai/conversation", -1, "Voice chat said she'd do it but no tool ran. Heard: " + promised + " | Said: " + missed); }); }
@@ -11072,7 +11080,7 @@ namespace CapriDesktop
                                             using (StreamReader reader = new StreamReader(request.Request.InputStream)) body = reader.ReadToEnd();
                                             string path = request.Request.Url.PathAndQuery;
                                             lock (asked) asked.Add("http " + request.Request.HttpMethod + " " + path + " " + request.Request.Headers["xi-api-key"] + " " + body);
-                                            answer(request, path.IndexOf("get-signed-url", StringComparison.Ordinal) >= 0 ? "{\"signed_url\":\"ws://localhost:" + port + "/talk?token=t\"}" : path.StartsWith("/v1/convai/tools", StringComparison.Ordinal) ? (request.Request.HttpMethod == "GET" ? keptTools : "{\"id\":\"tool_" + (++made) + "\"}") : "{\"agent_id\":\"agent_test\"}");
+                                            answer(request, path.StartsWith("/v1/convai/llm/list", StringComparison.Ordinal) ? "{\"llms\":[{\"llm\":\"gemini-2.5-flash\"},{\"llm\":\"claude-sonnet-4-5\"},{\"llm\":\"claude-sonnet-5\"},{\"llm\":\"claude-sonnet-5-20260101\"},{\"llm\":\"claude-sonnet-9\",\"deprecation_info\":{\"is_deprecated\":true}},{\"llm\":\"claude-haiku-4-5\"},{\"llm\":\"gpt-5-mini\"}]}" : path.IndexOf("get-signed-url", StringComparison.Ordinal) >= 0 ? "{\"signed_url\":\"ws://localhost:" + port + "/talk?token=t\"}" : path.StartsWith("/v1/convai/tools", StringComparison.Ordinal) ? (request.Request.HttpMethod == "GET" ? keptTools : "{\"id\":\"tool_" + (++made) + "\"}") : "{\"agent_id\":\"agent_test\"}");
                                         }
                                         socket = talk.AcceptWebSocketAsync(null).Result.WebSocket;
                                         lock (asked) asked.Add("init " + receive());
@@ -11181,7 +11189,9 @@ namespace CapriDesktop
                             if (heard != "hi" || reply != "Loud and clear, choom." || (talkState != TalkState.Talking && talkState != TalkState.Online) || !speaker.Busy) throw new Exception("Voice chat did not hear and answer: " + heard + " / " + reply + " / " + talkState + " / " + log);
                             Play(idle);
                             if (MouthCell(clock.Elapsed.TotalSeconds, idle) < 0) throw new Exception("Her mouth did not follow the agent's audio.");
-                            string[] wanted = { "http POST /v1/convai/agents/create sk_test_capri_1234 {\"name\":\"Capri\"", "\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45}", "http PATCH /v1/convai/agents/agent_old sk_test_capri_1234 {\"conversation_config\":{\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45},\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "\"tool_ids\":[\"tool_kept\",\"tool_1\",\"tool_2\",\"tool_3\",\"tool_4\",\"tool_5\",\"tool_6\",\"tool_7\",\"tool_8\",\"tool_9\",\"tool_10\",\"tool_11\",\"tool_12\",\"tool_13\"]", "\"tool_ids\":[\"tool_kept\",\"tool_14\",\"tool_15\",\"tool_16\",\"tool_17\",\"tool_18\",\"tool_19\",\"tool_20\",\"tool_21\",\"tool_22\",\"tool_23\",\"tool_24\",\"tool_25\",\"tool_26\"]}}}}", "\"name\":\"play_music\"", "\"name\":\"app_window\"", "\"name\":\"look_at_screen\"", "http GET /v1/convai/tools sk_test_capri_1234", "http POST /v1/convai/tools sk_test_capri_1234 {\"tool_config\":{\"type\":\"client\",\"name\":\"open_website\"", "\"name\":\"media\",\"description\":\"Control the music", "\"expects_response\":true,\"response_timeout_secs\":20}}", "You have tools for their PC", "tool {\"type\":\"client_tool_result\",\"tool_call_id\":\"call_1\",\"result\":\"Opened Spotify.\",\"is_error\":false}", "ran SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify", "Never check in", "beg them to talk or say they left you hanging", "\"prompt\":{\"prompt\":\"You are Capri", "\"llm\":\"gemini-2.5-flash\"", "\"tts\":{\"voice_id\":\"abc\"}", "\"overrides\":{\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":true}},\"tts\":{\"voice_id\":true}}}", "http GET /v1/convai/conversation/get-signed-url?agent_id=agent_old sk_test_capri_1234", "init {\"type\":\"conversation_initiation_client_data\",\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "pong {\"type\":\"pong\",\"event_id\":7}", "chunk silent | chunk loud | chunk loud" };
+                            Func<string, string> bestOf = delegate(string ids) { System.Collections.Generic.List<AgentBrain> list = new System.Collections.Generic.List<AgentBrain>(); foreach (string id in ids.Split(',')) list.Add(new AgentBrain { Id = id }); return Agent.Best(new AgentBrains { Llms = list.ToArray() }); };
+                            if (bestOf("gemini-2.5-flash,claude-sonnet-4-5-20250929,claude-sonnet-4-5,claude-sonnet-4,claude-3-5-sonnet,claude-opus-5") != "claude-sonnet-4-5" || bestOf("gemini-2.5-flash,gemini-3.8-flash,gemini-3.8-flash-lite,gemini-4-argon,gpt-6.1") != "gemini-3.8-flash" || bestOf("gpt-4o,gpt-5.6,gpt-5.6-mini,gpt-6") != "gpt-6" || bestOf("qwen3-30b-a3b") != Agent.OldMind || Agent.Best(null) != Agent.OldMind) throw new Exception("Her call brain pick is wrong: " + bestOf("gemini-2.5-flash,claude-sonnet-4-5-20250929,claude-sonnet-4-5,claude-sonnet-4"));
+                            string[] wanted = { "http POST /v1/convai/agents/create sk_test_capri_1234 {\"name\":\"Capri\"", "\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45}", "http PATCH /v1/convai/agents/agent_old sk_test_capri_1234 {\"conversation_config\":{\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45},\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "\"tool_ids\":[\"tool_kept\",\"tool_1\",\"tool_2\",\"tool_3\",\"tool_4\",\"tool_5\",\"tool_6\",\"tool_7\",\"tool_8\",\"tool_9\",\"tool_10\",\"tool_11\",\"tool_12\",\"tool_13\"]", "\"tool_ids\":[\"tool_kept\",\"tool_14\",\"tool_15\",\"tool_16\",\"tool_17\",\"tool_18\",\"tool_19\",\"tool_20\",\"tool_21\",\"tool_22\",\"tool_23\",\"tool_24\",\"tool_25\",\"tool_26\"]}}}}", "\"name\":\"play_music\"", "\"name\":\"app_window\"", "\"name\":\"look_at_screen\"", "http GET /v1/convai/tools sk_test_capri_1234", "http POST /v1/convai/tools sk_test_capri_1234 {\"tool_config\":{\"type\":\"client\",\"name\":\"open_website\"", "\"name\":\"media\",\"description\":\"Control the music", "\"expects_response\":true,\"response_timeout_secs\":20}}", "You have tools for their PC", "tool {\"type\":\"client_tool_result\",\"tool_call_id\":\"call_1\",\"result\":\"Opened Spotify.\",\"is_error\":false}", "ran SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify", "Never check in", "beg them to talk or say they left you hanging", "\"prompt\":{\"prompt\":\"You are Capri", "\"llm\":\"claude-sonnet-5\"", "http GET /v1/convai/llm/list sk_test_capri_1234", "\"tts\":{\"voice_id\":\"abc\"}", "\"overrides\":{\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":true}},\"tts\":{\"voice_id\":true}}}", "http GET /v1/convai/conversation/get-signed-url?agent_id=agent_old sk_test_capri_1234", "init {\"type\":\"conversation_initiation_client_data\",\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "pong {\"type\":\"pong\",\"event_id\":7}", "chunk silent | chunk loud | chunk loud" };
                             foreach (string piece in wanted) if (log.IndexOf(piece, StringComparison.Ordinal) < 0) throw new Exception("Agent traffic was missing " + piece + ": " + log);
                             if (log.IndexOf("tool_stale", StringComparison.Ordinal) >= 0 || System.Text.RegularExpressions.Regex.Matches(log, "http POST /v1/convai/tools").Count != 26) throw new Exception("Voice chat reused a stale tool or remade a kept one: " + log);
                             Hands.Run = handsRun;
