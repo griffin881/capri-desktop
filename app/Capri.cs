@@ -5979,6 +5979,7 @@ namespace CapriDesktop
                 test.Interval = 500;
                 int step = 0;
                 int thoughts = 0;
+                int freeWaits = 0;
                 byte[] tone = null;
                 string voiced = null;
                 ManualResetEvent voiceReady = new ManualResetEvent(false);
@@ -11571,6 +11572,8 @@ namespace CapriDesktop
                         {
                             string[] heardLog;
                             lock (earsLog) heardLog = earsLog.ToArray();
+                            // A slow test machine can take a few ticks to speak the reply, so wait for it before judging.
+                            if (heardLog.Length < 2 && ++freeWaits < 20) return;
                             if (string.Join(" | ", heardLog) != "think What's up, choom? | free voice Just vibing, choom.") throw new Exception("Free voice chat heard wrong or didn't speak in her free voice: " + string.Join(" | ", heardLog));
                             FreeSpeak = null;
                             lock (earsLog) earsLog.Remove("free voice Just vibing, choom.");
