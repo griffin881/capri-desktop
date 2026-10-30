@@ -4070,7 +4070,7 @@ namespace CapriDesktop
         private void OnUiNow(Action action)
         {
             if (!InvokeRequired) { action(); return; }
-            try { Invoke(action); } catch (InvalidOperationException) { } catch (ObjectDisposedException) { }
+            try { Invoke(action); } catch (InvalidOperationException) { }
         }
 
         // What they pasted in the Keys box: a free brain key, a server link, or NAME then a key. Runs off the UI thread, since a brain key gets checked.
