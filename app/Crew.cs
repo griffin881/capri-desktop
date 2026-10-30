@@ -73,7 +73,14 @@ namespace CapriDesktop
         // The last few lines of their talk, read when a job starts.
         internal Func<string> Context = delegate { return null; };
 
-        internal const int MaxSteps = 16;
+        // Saved keys from the vault, name and value: every command and OpenCode get them as environment variables, and no output ever shows them.
+        internal Func<List<KeyValuePair<string, string>>> Keys = delegate { return new List<KeyValuePair<string, string>>(); };
+        // The OpenCode model for her job brain, like cerebras/gpt-oss-120b, used when they haven't named one.
+        internal Func<string> JobCodeModel = delegate { return null; };
+
+        // A small brain on this PC gets short jobs and a short memory of them; a cloud brain gets room to really work.
+        internal const int MaxSteps = 16, CloudSteps = 40;
+        private static int StepsFor(Brain brain) { return brain.Remote != null ? CloudSteps : MaxSteps; }
         private readonly string bookPath;
         private readonly string home;
         private readonly List<Gig> gigs = new List<Gig>();
@@ -206,6 +213,8 @@ namespace CapriDesktop
 
         private void Finish(Gig gig, string status, string report)
         {
+            report = Hide(report);
+            gig.Result = Hide(gig.Result);
             gig.Report = string.IsNullOrWhiteSpace(report) ? (status == "done" ? "Done with " + gig.Title + "." : gig.Title + " didn't work out.") : report.Trim();
             gig.Ended = Now();
             Set(gig, status);
@@ -252,24 +261,26 @@ namespace CapriDesktop
             "Each run_powershell is a fresh Windows PowerShell 5.1 session that starts in the job folder: nothing carries over except files, installs and environment changes saved to disk.\n" +
             "Prefer winget for installing apps, with --silent --accept-source-agreements --accept-package-agreements. Nothing can wait for typing: never use Read-Host, pause, or anything that opens a prompt; pass yes, silent or force flags instead.\n" +
             "Don't delete or overwrite their files unless the job says to, and leave system settings, the registry, drivers and disks alone unless the job is about them.\n" +
-            "If something needs them, like signing in, a password, an API key, a payment or a click in a browser, stop and call finish with action failed and say exactly what they need to do.\n" +
+            "If something needs them, like signing in, a password, an API key that isn't in their saved keys, a payment or a click in a browser, stop and call finish with action failed and say exactly what they need to do (a key goes in the Keys box on Capri's jobs board).\n" +
             "Jobs are often short, like \"download DeepSeek\": read what you two were just talking about to work out what they meant, like which model, which site or which machine (a job about a Kaggle notebook happens on Kaggle, through the kaggle command, not on this PC). Don't install some other app just because its name matches. If it's still unclear what they want, don't guess: call finish with action failed and ask them the one question that settles it.\n" +
             "Check your work before you finish, like running the program's --version or listing the files. Then call finish with action done and what you did, what they need to know and where things are, in plain words.";
 
         private void Terminal(Gig gig, Brain brain, string notes, string extra = null)
         {
-            string prompt = TerminalPrompt + (extra ?? "");
+            string prompt = TerminalPrompt + KeysNote() + (extra ?? "");
             List<string> steps = new List<string>();
-            for (int step = 0; step < MaxSteps && !gig.Stop; step++)
+            int most = StepsFor(brain);
+            bool cloud = brain.Remote != null;
+            for (int step = 0; step < most && !gig.Stop; step++)
             {
                 List<KeyValuePair<string, ToolArguments>> calls = new List<KeyValuePair<string, ToolArguments>>();
-                string written = brain.Step(prompt, Brief(gig, notes, steps), Render(TerminalTools, false), Render(TerminalTools, true), Listing(TerminalTools), calls, 700);
+                string written = brain.Step(prompt, Brief(gig, notes, steps, cloud ? 8 : 5, cloud ? 16000 : 6500, most), Render(TerminalTools, false), Render(TerminalTools, true), Listing(TerminalTools), calls, 700);
                 string tool;
                 ToolArguments args;
                 if (!Pick(calls, written, out tool, out args)) { steps.Add("(You replied without a tool call. Call exactly one tool.)"); continue; }
                 if (tool == "finish") { gig.Result = Clean(args.Text, "Done."); if (args.Action == "failed") Note(gig, "Worker says it can't finish: " + gig.Result); return; }
-                string outcome = Act(gig, tool, args);
-                steps.Add(Describe(tool, args) + "\n" + Trim(outcome, 1100));
+                string outcome = Hide(Act(gig, tool, args));
+                steps.Add(Describe(tool, args) + "\n" + Trim(outcome, cloud ? 2500 : 1100));
             }
             if (!gig.Stop && gig.Result == null) gig.Result = "Ran out of steps before finishing.";
         }
@@ -354,10 +365,12 @@ namespace CapriDesktop
         private void Research(Gig gig, Brain brain, string notes)
         {
             List<string> steps = new List<string>();
-            for (int step = 0; step < MaxSteps && !gig.Stop; step++)
+            int most = brain.Remote != null ? 30 : MaxSteps;
+            bool cloud = brain.Remote != null;
+            for (int step = 0; step < most && !gig.Stop; step++)
             {
                 List<KeyValuePair<string, ToolArguments>> calls = new List<KeyValuePair<string, ToolArguments>>();
-                string written = brain.Step(ResearchPrompt, Brief(gig, notes, steps, 3, 7000), Render(ResearchTools, false), Render(ResearchTools, true), Listing(ResearchTools), calls, 1100);
+                string written = brain.Step(ResearchPrompt, Brief(gig, notes, steps, cloud ? 6 : 3, cloud ? 20000 : 7000, most), Render(ResearchTools, false), Render(ResearchTools, true), Listing(ResearchTools), calls, 1100);
                 string tool;
                 ToolArguments args;
                 if (!Pick(calls, written, out tool, out args)) { steps.Add("(You replied without a tool call. Call exactly one tool.)"); continue; }
@@ -378,7 +391,7 @@ namespace CapriDesktop
                 if (tool == "web_search") { Note(gig, "Searching: " + args.Search); found = Search(args.Search); }
                 else if (tool == "open_page") { Note(gig, "Reading: " + args.Site); found = Page(args.Site); }
                 else found = "There's no tool called " + tool + ".";
-                steps.Add(Describe(tool, args) + "\n" + Trim(found, 2200));
+                steps.Add(Describe(tool, args) + "\n" + Trim(found, cloud ? 4000 : 2200));
             }
             if (!gig.Stop && gig.Result == null) gig.Result = "Ran out of steps before writing it up.";
         }
@@ -539,12 +552,19 @@ namespace CapriDesktop
             string prompt = gig.Ask + (string.IsNullOrEmpty(gig.Context) ? "" : "\n\nWhat we were just talking about, for context:\n" + gig.Context) + "\n\nPlan: " + gig.Plan + (string.IsNullOrEmpty(notes) ? "" : "\n\nA reviewer checked your last attempt and said: " + notes) +
                 "\n\nWork in this folder. When you're done, finish with a short summary of what you built or changed, and how to run or use it.";
             string model = OpenCodeModel();
+            string fallback = JobCodeModel == null ? null : JobCodeModel();
+            if (fallback != null && (string.IsNullOrWhiteSpace(model) || model.Contains(":")))
+            {
+                if (!string.IsNullOrWhiteSpace(model)) Note(gig, model.Trim() + " is a small model on this PC, too weak for OpenCode, so it's using " + fallback + " instead.");
+                model = fallback;
+            }
+            prompt += KeysNote();
             string command = "opencode run --auto --dir " + Quote(gig.Folder) + " --title " + Quote(gig.Title) + (string.IsNullOrWhiteSpace(model) ? "" : " --model " + Quote(model.Trim())) + " " + Quote(prompt);
             Note(gig, "OpenCode is building in " + gig.Folder + (string.IsNullOrWhiteSpace(model) ? "" : " with " + model.Trim()));
             int code;
             string output = Shell(gig, command, gig.Folder, 2400, out code);
             output = Regex.Replace(output, @"\x1B\[[0-9;?]*[A-Za-z]", "");
-            gig.Result = "OpenCode exited with code " + code + ". The end of its output:\n" + Tail(output, 3000);
+            gig.Result = "OpenCode exited with code " + code + ". The end of its output:\n" + Tail(Hide(output), 3000);
             Note(gig, "OpenCode finished (exit " + code + ").");
         }
 
@@ -596,6 +616,7 @@ namespace CapriDesktop
             start.StandardOutputEncoding = Encoding.UTF8;
             start.StandardErrorEncoding = Encoding.UTF8;
             start.WorkingDirectory = folder;
+            foreach (KeyValuePair<string, string> key in SavedKeys()) start.EnvironmentVariables[key.Key] = key.Value;
             StringBuilder output = new StringBuilder();
             object sink = new object();
             using (Process process = new Process { StartInfo = start })
@@ -620,7 +641,35 @@ namespace CapriDesktop
                 gig.Running = null;
                 code = exited ? process.ExitCode : -1;
             }
-            lock (sink) return output.ToString().TrimEnd();
+            lock (sink) return Hide(output.ToString().TrimEnd());
+        }
+
+        private List<KeyValuePair<string, string>> SavedKeys()
+        {
+            List<KeyValuePair<string, string>> all = null;
+            try { all = Keys == null ? null : Keys(); } catch (Exception) { all = null; }
+            List<KeyValuePair<string, string>> kept = new List<KeyValuePair<string, string>>();
+            if (all != null) foreach (KeyValuePair<string, string> key in all) if (!string.IsNullOrEmpty(key.Key) && !string.IsNullOrEmpty(key.Value) && Regex.IsMatch(key.Key, @"^[A-Za-z_][A-Za-z0-9_]*$")) kept.Add(key);
+            return kept;
+        }
+
+        // Anything a command prints, a file holds or a report says never carries a saved key's value.
+        internal string Hide(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            foreach (KeyValuePair<string, string> key in SavedKeys())
+                if (key.Value.Length >= 8) text = text.Replace(key.Value, "[" + key.Key + " hidden]");
+            return text;
+        }
+
+        // What the worker is told about the vault: names only, never values.
+        private string KeysNote()
+        {
+            List<KeyValuePair<string, string>> keys = SavedKeys();
+            if (keys.Count == 0) return "";
+            List<string> names = keys.ConvertAll(key => "$env:" + key.Key);
+            return "\nTheir saved keys are already set as environment variables in every command: " + string.Join(", ", names.ToArray()) + ". " +
+                "Use them by name, never print or echo their values, and when a key has to be saved somewhere, write it from the variable, like [Environment]::SetEnvironmentVariable('NAME', $env:NAME, 'User'), or in a config that reads the variable.";
         }
 
         private static void Kill(Process process)
@@ -643,7 +692,7 @@ namespace CapriDesktop
             return Voice.Quote(gig.Ask) + (string.IsNullOrEmpty(gig.Context) ? "" : "\nWhat you and they were just talking about, oldest first (use it to work out what they meant, like which download or where):\n" + gig.Context);
         }
 
-        private static string Brief(Gig gig, string notes, List<string> steps, int full = 5, int room = 6500)
+        private static string Brief(Gig gig, string notes, List<string> steps, int full = 5, int room = 6500, int most = MaxSteps)
         {
             StringBuilder text = new StringBuilder("Job: " + Asked(gig) + "\nPlan: " + gig.Plan + "\nJob folder: " + gig.Folder);
             if (!string.IsNullOrEmpty(notes)) text.Append("\nThe overseer checked your last try and said: " + notes);
@@ -662,7 +711,7 @@ namespace CapriDesktop
                 }
                 foreach (string line in kept) text.Append("\n" + line);
             }
-            text.Append(steps.Count >= MaxSteps - 3 ? "\n\nYou're nearly out of steps: finish now with what you have." : "\n\nWhat's next? Call exactly one tool.");
+            text.Append(steps.Count >= most - 3 ? "\n\nYou're nearly out of steps: finish now with what you have." : "\n\nWhat's next? Call exactly one tool.");
             return text.ToString();
         }
 
@@ -840,6 +889,7 @@ namespace CapriDesktop
 
         private void Note(Gig gig, string line)
         {
+            line = Hide(line ?? "");
             lock (gate)
             {
                 if (gig.Log == null) gig.Log = new List<string>();
@@ -911,12 +961,16 @@ namespace CapriDesktop
         private readonly Crew crew;
         private readonly ListBox list = new ListBox();
         private readonly TextBox details = new TextBox();
-        private readonly Button stop = new Button(), open = new Button(), clear = new Button(), saveOverseer = new Button(), saveModel = new Button(), saveKaggle = new Button();
-        private readonly TextBox overseer = new TextBox(), model = new TextBox(), kaggle = new TextBox();
-        private readonly Label overseerLabel = new Label(), modelLabel = new Label(), kaggleLabel = new Label(), status = new Label();
-        internal Action<string> SaveOverseer;
+        private readonly Button stop = new Button(), open = new Button(), clear = new Button(), saveKey = new Button(), forgetKey = new Button(), saveModel = new Button(), saveKaggle = new Button();
+        private readonly TextBox keyBox = new TextBox(), model = new TextBox(), kaggle = new TextBox();
+        private readonly ComboBox saved = new ComboBox();
+        private readonly Label keysLabel = new Label(), savedLabel = new Label(), modelLabel = new Label(), kaggleLabel = new Label(), status = new Label();
+        // The vault: save what they pasted (and say how it went), forget one by name, and list what's saved.
+        internal Func<string, string> SaveKey;
+        internal Action<string> ForgetKey;
+        internal Func<List<string>> KeyNames;
         internal Action<string> SaveModel;
-        internal Func<string> OverseerTail;
+        private string keySaid;
         private string shownId;
         private static readonly Color Back = Color.FromArgb(18, 19, 24), Panel = Color.FromArgb(28, 30, 38), Ink = Color.FromArgb(232, 234, 240), Dim = Color.FromArgb(140, 146, 162), Cyan = Color.FromArgb(102, 222, 242);
 
@@ -928,8 +982,8 @@ namespace CapriDesktop
             BackColor = Back;
             ForeColor = Ink;
             Font = new Font("Consolas", 9.5f);
-            ClientSize = new Size(820, 620);
-            MinimumSize = new Size(640, 480);
+            ClientSize = new Size(820, 680);
+            MinimumSize = new Size(640, 540);
             StartPosition = FormStartPosition.CenterScreen;
 
             list.BackColor = Panel; list.ForeColor = Ink; list.BorderStyle = BorderStyle.None; list.IntegralHeight = false;
@@ -938,19 +992,37 @@ namespace CapriDesktop
             list.SelectedIndexChanged += delegate { Display(Selected); };
             details.Multiline = true; details.ReadOnly = true; details.ScrollBars = ScrollBars.Vertical; details.WordWrap = true;
             details.BackColor = Panel; details.ForeColor = Ink; details.BorderStyle = BorderStyle.None;
-            foreach (Button b in new[] { stop, open, clear, saveOverseer, saveModel, saveKaggle })
+            foreach (Button b in new[] { stop, open, clear, saveKey, forgetKey, saveModel, saveKaggle })
             {
                 b.FlatStyle = FlatStyle.Flat; b.FlatAppearance.BorderColor = Color.FromArgb(60, 64, 78); b.BackColor = Panel; b.ForeColor = Ink;
             }
-            stop.Text = "Stop job"; open.Text = "Open folder"; clear.Text = "Clear finished"; saveOverseer.Text = "Save"; saveModel.Text = "Save"; saveKaggle.Text = "Save";
+            stop.Text = "Stop job"; open.Text = "Open folder"; clear.Text = "Clear finished"; saveKey.Text = "Save"; forgetKey.Text = "Remove"; saveModel.Text = "Save"; saveKaggle.Text = "Save";
             stop.Click += delegate { Gig g = Selected; if (g != null && !g.Finished) crew.Stop(g); };
             open.Click += delegate { Gig g = Selected; string folder = g != null ? g.Folder : crew.Home; try { Directory.CreateDirectory(folder); Process.Start("explorer.exe", "\"" + folder + "\""); } catch (Exception) { } };
             clear.Click += delegate { crew.Clear(); };
-            overseerLabel.Text = "Overseer brain (optional): paste a server link, then a space and its key - like your Kaggle DeepSeek tunnel. Blank = her own brain checks the work.";
-            overseerLabel.ForeColor = Dim; overseerLabel.AutoSize = false;
-            overseer.BackColor = Panel; overseer.ForeColor = Ink; overseer.BorderStyle = BorderStyle.FixedSingle; overseer.UseSystemPasswordChar = true;
-            saveOverseer.Click += delegate { Action<string> save = SaveOverseer; if (save != null) save(overseer.Text.Trim()); overseer.Text = ""; Reload(); };
-            modelLabel.Text = "OpenCode model (optional, like opencode/grok-code). Blank = OpenCode's own default.";
+            keysLabel.ForeColor = Dim; keysLabel.AutoSize = false;
+            keyBox.BackColor = Panel; keyBox.ForeColor = Ink; keyBox.BorderStyle = BorderStyle.FixedSingle; keyBox.UseSystemPasswordChar = true;
+            keyBox.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; saveKey.PerformClick(); } };
+            saveKey.Click += delegate
+            {
+                Func<string, string> save = SaveKey;
+                string text = keyBox.Text.Trim();
+                keyBox.Text = "";
+                if (save == null || text.Length == 0) return;
+                saveKey.Enabled = false;
+                keySaid = "Checking that key...";
+                Reload();
+                System.Threading.ThreadPool.QueueUserWorkItem(delegate
+                {
+                    string said;
+                    try { said = save(text); } catch (Exception error) { said = "Couldn't save that: " + error.Message; }
+                    try { BeginInvoke((Action)delegate { keySaid = said; saveKey.Enabled = true; Reload(); }); } catch (InvalidOperationException) { }
+                });
+            };
+            savedLabel.Text = "Saved:"; savedLabel.ForeColor = Dim; savedLabel.AutoSize = false;
+            saved.DropDownStyle = ComboBoxStyle.DropDownList; saved.BackColor = Panel; saved.ForeColor = Ink; saved.FlatStyle = FlatStyle.Flat;
+            forgetKey.Click += delegate { Action<string> forget = ForgetKey; string name = saved.SelectedItem as string; if (forget != null && name != null) { forget(name); keySaid = "Removed " + name + "."; Reload(); } };
+            modelLabel.Text = "OpenCode model (optional, like cerebras/gpt-oss-120b). Blank = her job brain.";
             modelLabel.ForeColor = Dim; modelLabel.AutoSize = false;
             model.BackColor = Panel; model.ForeColor = Ink; model.BorderStyle = BorderStyle.FixedSingle;
             saveModel.Click += delegate { Action<string> save = SaveModel; if (save != null) save(model.Text.Trim()); };
@@ -958,7 +1030,7 @@ namespace CapriDesktop
             kaggle.BackColor = Panel; kaggle.ForeColor = Ink; kaggle.BorderStyle = BorderStyle.FixedSingle; kaggle.UseSystemPasswordChar = true;
             saveKaggle.Click += delegate { string said = Crew.SaveKaggle(kaggle.Text); kaggle.Text = ""; Reload(); kaggleLabel.Text = said; };
             status.ForeColor = Dim; status.AutoSize = false;
-            Controls.AddRange(new Control[] { list, details, stop, open, clear, overseerLabel, overseer, saveOverseer, modelLabel, model, saveModel, kaggleLabel, kaggle, saveKaggle, status });
+            Controls.AddRange(new Control[] { list, details, stop, open, clear, keysLabel, keyBox, saveKey, savedLabel, saved, forgetKey, modelLabel, model, saveModel, kaggleLabel, kaggle, saveKaggle, status });
             Resize += delegate { Arrange(); };
             Arrange();
             Reload();
@@ -968,7 +1040,7 @@ namespace CapriDesktop
 
         private void Arrange()
         {
-            int w = ClientSize.Width, h = ClientSize.Height, pad = 12, bottom = 188;
+            int w = ClientSize.Width, h = ClientSize.Height, pad = 12, bottom = 244;
             int listW = Math.Max(240, w * 2 / 5);
             list.Bounds = new Rectangle(pad, pad, listW, h - bottom - pad * 2 - 34);
             details.Bounds = new Rectangle(pad * 2 + listW, pad, w - listW - pad * 3, h - bottom - pad * 2 - 34);
@@ -977,15 +1049,18 @@ namespace CapriDesktop
             open.Bounds = new Rectangle(pad + 108, by, 110, 28);
             clear.Bounds = new Rectangle(pad + 226, by, 120, 28);
             status.Bounds = new Rectangle(pad + 356, by + 6, w - pad * 2 - 356, 20);
-            overseerLabel.Bounds = new Rectangle(pad, h - bottom + 4, w - pad * 2, 32);
-            overseer.Bounds = new Rectangle(pad, h - bottom + 38, w - pad * 2 - 80, 24);
-            saveOverseer.Bounds = new Rectangle(w - pad - 72, h - bottom + 36, 72, 28);
-            modelLabel.Bounds = new Rectangle(pad, h - bottom + 72, w - pad * 2, 18);
-            model.Bounds = new Rectangle(pad, h - bottom + 94, w - pad * 2 - 80, 24);
-            saveModel.Bounds = new Rectangle(w - pad - 72, h - bottom + 92, 72, 28);
-            kaggleLabel.Bounds = new Rectangle(pad, h - bottom + 128, w - pad * 2, 18);
-            kaggle.Bounds = new Rectangle(pad, h - bottom + 150, w - pad * 2 - 80, 24);
-            saveKaggle.Bounds = new Rectangle(w - pad - 72, h - bottom + 148, 72, 28);
+            keysLabel.Bounds = new Rectangle(pad, h - bottom + 2, w - pad * 2, 48);
+            keyBox.Bounds = new Rectangle(pad, h - bottom + 52, w - pad * 2 - 80, 24);
+            saveKey.Bounds = new Rectangle(w - pad - 72, h - bottom + 50, 72, 28);
+            savedLabel.Bounds = new Rectangle(pad, h - bottom + 88, 52, 20);
+            saved.Bounds = new Rectangle(pad + 56, h - bottom + 84, w - pad * 2 - 56 - 88, 24);
+            forgetKey.Bounds = new Rectangle(w - pad - 80, h - bottom + 82, 80, 28);
+            modelLabel.Bounds = new Rectangle(pad, h - bottom + 120, w - pad * 2, 18);
+            model.Bounds = new Rectangle(pad, h - bottom + 142, w - pad * 2 - 80, 24);
+            saveModel.Bounds = new Rectangle(w - pad - 72, h - bottom + 140, 72, 28);
+            kaggleLabel.Bounds = new Rectangle(pad, h - bottom + 178, w - pad * 2, 18);
+            kaggle.Bounds = new Rectangle(pad, h - bottom + 200, w - pad * 2 - 80, 24);
+            saveKaggle.Bounds = new Rectangle(w - pad - 72, h - bottom + 198, 72, 28);
         }
 
         private Gig Selected { get { return list.SelectedItem as Gig; } }
@@ -1005,10 +1080,19 @@ namespace CapriDesktop
             if (pick == null && all.Count > 0) pick = all[0];
             if (pick != null) list.SelectedItem = pick;
             Display(pick);
-            Func<string> tail = OverseerTail;
-            string t = tail == null ? null : tail();
-            overseer.Text = "";
-            overseerLabel.Text = "Overseer brain (optional): paste a server link, then a space and its key - like your Kaggle DeepSeek tunnel. " + (string.IsNullOrEmpty(t) ? "Blank = her own brain checks the work." : "Saved: " + t + ". Save it empty to go back to her own brain.");
+            Func<List<string>> names = KeyNames;
+            List<string> keys = names == null ? new List<string>() : names();
+            string pickedKey = saved.SelectedItem as string;
+            saved.BeginUpdate();
+            saved.Items.Clear();
+            foreach (string name in keys) saved.Items.Add(name);
+            saved.EndUpdate();
+            if (saved.Items.Count > 0) saved.SelectedItem = pickedKey != null && keys.Contains(pickedKey) ? pickedKey : saved.Items[0];
+            forgetKey.Enabled = saved.Items.Count > 0;
+            bool brains = keys.Exists(name => name.EndsWith(")", StringComparison.Ordinal) && name.Contains(" brain ("));
+            keysLabel.Text = (keySaid != null ? keySaid + "\r\n" : "") +
+                (brains ? "Keys for her jobs. The first brain does the work, the next one checks it, and the rest are backups. " : "Keys for her jobs. Paste a free brain key and her jobs run on it: Cerebras (cloud.cerebras.ai, fastest) or Gemini (aistudio.google.com). ") +
+                "Any other key: put its name first, like UPLINK_API_KEY sk-... Workers use keys without ever seeing them.";
             kaggleLabel.Text = Crew.KaggleReady ? "Kaggle: key saved, so her Kaggle worker is signed in. Paste a new token here to replace it." : "Kaggle API token: get one at kaggle.com/settings/api (Generate New Token) and paste it here, so her Kaggle worker can run your notebooks.";
             int running = all.FindAll(g => !g.Finished).Count;
             status.Text = running == 0 ? "Nothing running." + (Crew.HasOpenCode ? " OpenCode: found." : " OpenCode: not found on PATH.") : running + " running." + (Crew.HasOpenCode ? " OpenCode: found." : "");

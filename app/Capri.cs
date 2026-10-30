@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -121,6 +122,39 @@ namespace CapriDesktop
         }
     }
 
+    // One key in her jobs vault: a brain (Link, Model, named for its provider) or a plain key a worker uses (Name, Key).
+    [DataContract]
+    internal sealed class JobKey
+    {
+        [DataMember] public string Name;
+        [DataMember] public string Key;
+        [DataMember] public string Link;
+        [DataMember] public string Model;
+        internal string Shown { get { return Link != null ? Name + " brain (" + Model + ")" : Name; } }
+
+        // The environment variables coding tools like OpenCode read for each provider's key.
+        internal static string[] EnvNames(string provider)
+        {
+            if (provider == "Cerebras") return new[] { "CEREBRAS_API_KEY" };
+            if (provider == "Gemini") return new[] { "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY" };
+            if (provider == "Groq") return new[] { "GROQ_API_KEY" };
+            if (provider == "OpenRouter") return new[] { "OPENROUTER_API_KEY" };
+            if (provider == "NVIDIA") return new[] { "NVIDIA_API_KEY" };
+            if (provider == "Claude") return new[] { "ANTHROPIC_API_KEY" };
+            return new string[0];
+        }
+
+        internal static string CodeProvider(string provider)
+        {
+            if (provider == "Cerebras") return "cerebras";
+            if (provider == "Gemini") return "google";
+            if (provider == "Groq") return "groq";
+            if (provider == "OpenRouter") return "openrouter";
+            if (provider == "Claude") return "anthropic";
+            return null;
+        }
+    }
+
     [DataContract]
     internal sealed class Preferences
     {
@@ -188,6 +222,8 @@ namespace CapriDesktop
         [DataMember] public bool NoWake;
         [DataMember] public string OverseerLink;
         [DataMember] public string OpenCodeModel;
+        // Keys for her jobs, saved on the jobs board: brains her crew thinks with (Link and Model), and named keys her workers use (Name and Key).
+        [DataMember] public List<JobKey> JobKeys;
 
         [OnDeserializing]
         private void Defaults(StreamingContext context)
@@ -870,6 +906,8 @@ namespace CapriDesktop
             crew.Changed = delegate { Post(delegate { if (crewWindow != null && !crewWindow.IsDisposed && crewWindow.Visible) crewWindow.Reload(); }); };
             crew.Blackwall = delegate { return preferences.Bypass; };
             crew.OpenCodeModel = delegate { return preferences.OpenCodeModel; };
+            crew.JobCodeModel = JobCodeModel;
+            crew.Keys = VaultKeys;
             crew.Context = delegate { string said = callHeard; return Journal.Recent(14) + (chatting && !string.IsNullOrEmpty(said) ? "\n" + DateTime.Now.ToString("HH:mm") + " them (on the call, just now): " + said : ""); };
             if (!testing) { Hands.LookUp = Crew.LookUp; Hands.Answers = true; }
             Hands.Crew = delegate(string tool, ToolArguments args)
@@ -998,7 +1036,7 @@ namespace CapriDesktop
             }
             SplitKeys();
             brain.Remote = TierCloud();
-            brain.Spare = SpareCloud;
+            brain.Spares = SpareClouds;
             ShowTiers();
             voice.VoiceId = string.IsNullOrEmpty(preferences.VoiceId) ? null : preferences.VoiceId;
             voice.Model = string.IsNullOrEmpty(preferences.VoiceModel) ? null : preferences.VoiceModel;
@@ -1184,18 +1222,38 @@ namespace CapriDesktop
         {
             Brain hired = new Brain();
             Cloud remote = brain.Remote;
-            hired.Remote = remote == null ? null : new Cloud(remote.Key, remote.Model);
-            hired.Spare = brain.Spare;
+            List<Cloud> jobs = JobClouds();
+            Cloud mine = remote == null ? null : new Cloud(remote.Key, remote.Model);
+            // A job brain from the jobs board does the work; her own brain and her other key are the backups.
+            hired.Remote = jobs.Count > 0 ? jobs[0] : mine;
+            List<Cloud> spares = new List<Cloud>();
+            for (int i = 1; i < jobs.Count; i++) spares.Add(jobs[i]);
+            if (jobs.Count > 0 && mine != null) spares.Add(mine);
+            Cloud other = SpareCloud();
+            if (other != null) spares.Add(other);
+            hired.Spares = delegate { return spares; };
             hired.CloudWait = 120000;
             hired.Local = brain.Local;
             hired.LocalPick = brain.LocalPick;
-            hired.Model = brain.Model;
+            hired.Model = hired.Remote != null ? hired.Remote.Model : brain.Model;
             return hired;
         }
 
-        // The overseer: a server link or key they gave on the jobs board, else nobody and the worker's brain checks itself.
+        // The overseer: the second brain on the jobs board, or an older overseer link, else nobody and the worker's brain checks itself.
         private Brain OverseerBrain()
         {
+            List<Cloud> jobs = JobClouds();
+            if (jobs.Count >= 2)
+            {
+                Brain checker = new Brain();
+                checker.Remote = jobs[1];
+                checker.Model = jobs[1].Model;
+                checker.CloudWait = 120000;
+                List<Cloud> backups = new List<Cloud> { jobs[0] };
+                for (int i = 2; i < jobs.Count; i++) backups.Add(jobs[i]);
+                checker.Spares = delegate { return backups; };
+                return checker;
+            }
             string link = Voice.Unprotect(preferences.OverseerLink);
             if (string.IsNullOrWhiteSpace(link) || Cloud.KindOf(link) == null) return null;
             string kind = Cloud.KindOf(link);
@@ -1212,9 +1270,10 @@ namespace CapriDesktop
             if (crewWindow == null || crewWindow.IsDisposed)
             {
                 crewWindow = new CrewWindow(crew, tray.Icon);
-                crewWindow.SaveOverseer = delegate(string link) { preferences.OverseerLink = string.IsNullOrWhiteSpace(link) ? null : Voice.Protect(link.Trim()); SavePreferences(); };
+                crewWindow.SaveKey = SaveJobKey;
+                crewWindow.ForgetKey = ForgetJobKey;
+                crewWindow.KeyNames = JobKeyNames;
                 crewWindow.SaveModel = delegate(string model) { preferences.OpenCodeModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim(); SavePreferences(); };
-                crewWindow.OverseerTail = delegate { string link = Voice.Unprotect(preferences.OverseerLink); return string.IsNullOrEmpty(link) ? null : Cloud.KindOf(link) == "custom" ? Cloud.HostOf(link) : "key ending " + Voice.Tail(link); };
                 crewWindow.ModelText = preferences.OpenCodeModel;
             }
             crewWindow.Reload();
@@ -3944,6 +4003,139 @@ namespace CapriDesktop
             string key = Voice.Unprotect(preferences.Tier == 1 ? preferences.PaidKey : preferences.Tier == 2 ? preferences.NvidiaKey : null);
             string model = preferences.Tier == 1 ? preferences.PaidModel : preferences.Tier == 2 ? preferences.NvidiaModel : null;
             return key == null || model == null ? null : new Cloud(key, model);
+        }
+
+        // Who stands in when her brain goes quiet: the free job brains first, then her other key.
+        private List<Cloud> SpareClouds()
+        {
+            List<Cloud> all = JobClouds();
+            Cloud other = SpareCloud();
+            if (other != null) all.Add(other);
+            return all;
+        }
+
+        // The brains saved on the jobs board, in order.
+        private List<Cloud> JobClouds()
+        {
+            List<Cloud> all = new List<Cloud>();
+            List<JobKey> keys = preferences.JobKeys;
+            if (keys != null)
+                foreach (JobKey key in keys)
+                {
+                    if (key == null || key.Link == null || key.Model == null) continue;
+                    string link = Voice.Unprotect(key.Link);
+                    if (!string.IsNullOrEmpty(link) && Cloud.KindOf(link) != null) all.Add(new Cloud(link, key.Model));
+                }
+            return all;
+        }
+
+        // The vault as environment variables: named keys as saved, and each brain key under the names its tools look for.
+        private List<KeyValuePair<string, string>> VaultKeys()
+        {
+            List<KeyValuePair<string, string>> all = new List<KeyValuePair<string, string>>();
+            List<JobKey> keys = preferences.JobKeys;
+            if (keys == null) return all;
+            foreach (JobKey key in keys)
+            {
+                if (key == null) continue;
+                if (key.Link == null)
+                {
+                    string value = Voice.Unprotect(key.Key);
+                    if (!string.IsNullOrEmpty(value) && key.Name != null) all.Add(new KeyValuePair<string, string>(key.Name, value));
+                    continue;
+                }
+                string link = Voice.Unprotect(key.Link);
+                if (string.IsNullOrEmpty(link)) continue;
+                string token = Cloud.TokenOf(link);
+                if (string.IsNullOrEmpty(token) || token == "none") continue;
+                foreach (string name in JobKey.EnvNames(key.Name)) all.Add(new KeyValuePair<string, string>(name, token));
+            }
+            return all;
+        }
+
+        // The OpenCode name for her first job brain, so the builder codes with it.
+        private string JobCodeModel()
+        {
+            List<JobKey> keys = preferences.JobKeys;
+            if (keys == null) return null;
+            foreach (JobKey key in keys)
+                if (key != null && key.Link != null && key.Model != null)
+                {
+                    string provider = JobKey.CodeProvider(key.Name);
+                    return provider == null ? null : provider + "/" + key.Model;
+                }
+            return null;
+        }
+
+        private void OnUiNow(Action action)
+        {
+            if (!InvokeRequired) { action(); return; }
+            try { Invoke(action); } catch (InvalidOperationException) { } catch (ObjectDisposedException) { }
+        }
+
+        // What they pasted in the Keys box: a free brain key, a server link, or NAME then a key. Runs off the UI thread, since a brain key gets checked.
+        private string SaveJobKey(string text)
+        {
+            string[] parts = (text ?? "").Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) return "Paste a key first.";
+            // NAME=key works too; a key that only ends in = (some do) stays whole.
+            if (parts.Length == 1) { Match pair = Regex.Match(parts[0], @"^([A-Za-z_][A-Za-z0-9_]{1,63})=(.+)$"); if (pair.Success) parts = new[] { pair.Groups[1].Value, pair.Groups[2].Value }; }
+            string label;
+            bool named = parts.Length >= 2 && Regex.IsMatch(parts[0], @"^[A-Za-z_][A-Za-z0-9_]{1,63}$") && Cloud.Known(parts[0], out label) == null && !Cloud.IsAddress(parts[0]) && Cloud.KindOf(parts[0]) == null;
+            if (named)
+            {
+                string name = parts[0].ToUpperInvariant();
+                string value = parts[1];
+                OnUiNow(delegate
+                {
+                    List<JobKey> keys = preferences.JobKeys == null ? new List<JobKey>() : new List<JobKey>(preferences.JobKeys);
+                    keys.RemoveAll(k => k != null && k.Link == null && k.Name == name);
+                    keys.Add(new JobKey { Name = name, Key = Voice.Protect(value) });
+                    preferences.JobKeys = keys;
+                    SavePreferences();
+                });
+                return "Saved " + name + ". Her workers can use it as $env:" + name + ".";
+            }
+            string root = Cloud.Known(parts[0], out label);
+            string link = null, model = null;
+            if (root != null) { link = root + " " + parts[0]; model = parts.Length > 1 ? parts[1] : null; }
+            else if (Cloud.IsAddress(parts[0])) { link = parts[0] + (parts.Length > 1 ? " " + parts[1] : ""); model = parts.Length > 2 ? parts[2] : null; label = Cloud.HostOf(link); }
+            else if (Cloud.KindOf(parts[0]) == "nvidia" || Cloud.KindOf(parts[0]) == "anthropic") { link = parts[0]; model = parts.Length > 1 ? parts[1] : null; label = Cloud.KindOf(parts[0]) == "nvidia" ? "NVIDIA" : "Claude"; }
+            else return "I can't tell what that key is for. Put its name in front, like UPLINK_API_KEY sk-...";
+            List<string> models;
+            try { models = Brain.CloudModels(link); }
+            catch (Exception error) { return "That " + label + " key didn't work: " + Voice.Short(error.Message); }
+            if (model == null) model = Brain.JobModel(link, models);
+            if (model == null) return "That " + label + " key works, but it has no models I can use.";
+            string place = null;
+            OnUiNow(delegate
+            {
+                List<JobKey> keys = preferences.JobKeys == null ? new List<JobKey>() : new List<JobKey>(preferences.JobKeys);
+                keys.RemoveAll(k => k != null && k.Link != null && k.Name == label);
+                keys.Add(new JobKey { Name = label, Link = Voice.Protect(link), Model = model });
+                preferences.JobKeys = keys;
+                SavePreferences();
+                int at = keys.FindAll(k => k != null && k.Link != null).Count - 1;
+                place = at == 0 ? "doing her jobs now" : at == 1 ? "checking her work now" : "a backup now";
+                Brain.Thaw();
+            });
+            return "Saved. " + label + " " + model + " is " + (place ?? "saved") + ".";
+        }
+
+        private List<string> JobKeyNames()
+        {
+            List<string> names = new List<string>();
+            List<JobKey> keys = preferences.JobKeys;
+            if (keys != null) foreach (JobKey key in keys) if (key != null) names.Add(key.Shown);
+            return names;
+        }
+
+        private void ForgetJobKey(string shown)
+        {
+            List<JobKey> keys = preferences.JobKeys == null ? new List<JobKey>() : new List<JobKey>(preferences.JobKeys);
+            keys.RemoveAll(k => k == null || k.Shown == shown);
+            preferences.JobKeys = keys;
+            SavePreferences();
         }
 
         private Cloud TierCloud()
@@ -11261,6 +11453,15 @@ namespace CapriDesktop
                             if (heard != "hi" || reply != "Loud and clear, choom." || (talkState != TalkState.Talking && talkState != TalkState.Online) || !speaker.Busy) throw new Exception("Voice chat did not hear and answer: " + heard + " / " + reply + " / " + talkState + " / " + log);
                             Play(idle);
                             if (MouthCell(clock.Elapsed.TotalSeconds, idle) < 0) throw new Exception("Her mouth did not follow the agent's audio.");
+                            // Free job brains: a bare key finds its server, links keep their own version path, and each key gets its best free model.
+                            string knownName;
+                            if (Cloud.Known("csk-abc123", out knownName) != "https://api.cerebras.ai/v1" || knownName != "Cerebras" || Cloud.Known("AIzaSyX", out knownName) == null || knownName != "Gemini" || Cloud.Known("sk-proj-1", out knownName) != null) throw new Exception("Free brain keys aren't recognised.");
+                            if (Cloud.ApiOf("https://generativelanguage.googleapis.com/v1beta/openai AIza") != "https://generativelanguage.googleapis.com/v1beta/openai" || Cloud.ApiOf("https://api.cerebras.ai/v1 csk") != "https://api.cerebras.ai/v1" || Cloud.ApiOf("https://api.groq.com/openai/v1/ g") != "https://api.groq.com/openai/v1" || Cloud.ApiOf("https://abc.trycloudflare.com x") != "https://abc.trycloudflare.com/v1" || Cloud.ApiOf("http://127.0.0.1:8080/v1/chat/completions") != "http://127.0.0.1:8080/v1") throw new Exception("Server links go to the wrong place: " + Cloud.ApiOf("https://generativelanguage.googleapis.com/v1beta/openai AIza"));
+                            if (Brain.JobModel("https://api.cerebras.ai/v1 csk", new System.Collections.Generic.List<string> { "llama3.1-8b", "qwen-3.8-27b", "gpt-oss-120b" }) != "gpt-oss-120b"
+                                || Brain.JobModel("https://generativelanguage.googleapis.com/v1beta/openai AIza", new System.Collections.Generic.List<string> { "models/gemini-3.8-flash-lite", "models/gemini-3.6-flash", "models/gemini-3.8-flash-tts", "models/gemini-3.8-flash", "models/gemma-4-31b-it" }) != "gemini-3.8-flash"
+                                || Brain.JobModel("https://openrouter.ai/api/v1 sk-or-x", new System.Collections.Generic.List<string> { "openai/gpt-oss-120b", "openai/gpt-oss-120b:free" }) != "openai/gpt-oss-120b:free"
+                                || !Cloud.Hosted("https://api.cerebras.ai/v1 csk") || Cloud.Hosted("http://127.0.0.1:8080 x") || !Brain.Sighted("gemini-3.8-flash") || Brain.Sighted("gpt-oss-120b"))
+                                throw new Exception("Job brain picks are wrong.");
                             Func<string, string> bestOf = delegate(string ids) { System.Collections.Generic.List<AgentBrain> list = new System.Collections.Generic.List<AgentBrain>(); foreach (string id in ids.Split(',')) list.Add(new AgentBrain { Id = id }); return Agent.Best(new AgentBrains { Llms = list.ToArray() }); };
                             if (bestOf("gemini-2.5-flash,claude-sonnet-4-5-20250929,claude-sonnet-4-5,claude-sonnet-4,claude-3-5-sonnet,claude-opus-5") != "claude-sonnet-4-5" || bestOf("gemini-2.5-flash,gemini-3.8-flash,gemini-3.8-flash-lite,gemini-4-argon,gpt-6.1") != "gemini-3.8-flash" || bestOf("gpt-4o,gpt-5.6,gpt-5.6-mini,gpt-6") != "gpt-6" || bestOf("qwen3-30b-a3b") != Agent.OldMind || Agent.Best(null) != Agent.OldMind) throw new Exception("Her call brain pick is wrong: " + bestOf("gemini-2.5-flash,claude-sonnet-4-5-20250929,claude-sonnet-4-5,claude-sonnet-4"));
                             string[] wanted = { "http POST /v1/convai/agents/create sk_test_capri_1234 {\"name\":\"Capri\"", "\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45}", "http PATCH /v1/convai/agents/agent_old sk_test_capri_1234 {\"conversation_config\":{\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45},\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "\"tool_ids\":[\"tool_kept\",\"tool_1\",\"tool_2\",\"tool_3\",\"tool_4\",\"tool_5\",\"tool_6\",\"tool_7\",\"tool_8\",\"tool_9\",\"tool_10\",\"tool_11\",\"tool_12\",\"tool_13\",\"tool_14\"]", "\"tool_ids\":[\"tool_kept\",\"tool_15\",\"tool_16\",\"tool_17\",\"tool_18\",\"tool_19\",\"tool_20\",\"tool_21\",\"tool_22\",\"tool_23\",\"tool_24\",\"tool_25\",\"tool_26\",\"tool_27\",\"tool_28\"]}}}}", "\"name\":\"play_music\"", "\"name\":\"app_window\"", "\"name\":\"look_at_screen\"", "http GET /v1/convai/tools sk_test_capri_1234", "http POST /v1/convai/tools sk_test_capri_1234 {\"tool_config\":{\"type\":\"client\",\"name\":\"open_website\"", "\"name\":\"media\",\"description\":\"Control the music", "\"expects_response\":true,\"response_timeout_secs\":20}}", "You have tools for their PC", "tool {\"type\":\"client_tool_result\",\"tool_call_id\":\"call_1\",\"result\":\"Opened Spotify.\",\"is_error\":false}", "ran SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify", "Never check in", "beg them to talk or say they left you hanging", "\"prompt\":{\"prompt\":\"You are Capri", "\"llm\":\"claude-sonnet-5\"", "http GET /v1/convai/llm/list sk_test_capri_1234", "\"tts\":{\"voice_id\":\"abc\"}", "\"overrides\":{\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":true}},\"tts\":{\"voice_id\":true}}}", "http GET /v1/convai/conversation/get-signed-url?agent_id=agent_old sk_test_capri_1234", "init {\"type\":\"conversation_initiation_client_data\",\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "pong {\"type\":\"pong\",\"event_id\":7}", "chunk silent | chunk loud | chunk loud" };

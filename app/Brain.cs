@@ -222,6 +222,30 @@ namespace CapriDesktop
         internal volatile string Model;
         internal Cloud(string key, string model) { Key = key; Kind = KindOf(key); Model = model; }
         internal bool Claude { get { return Kind == "anthropic"; } }
+        internal string Id { get { return Kind + "|" + (Kind == "custom" ? HostOf(Key) : "") + "|" + Model; } }
+
+        // The API root for a server link: its own version path if it has one (/v1, /openai/v1, /v1beta/openai), else /v1.
+        internal static string ApiOf(string key)
+        {
+            string address = key.Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)[0].TrimEnd('/');
+            if (address.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)) address = address.Substring(0, address.Length - "/chat/completions".Length).TrimEnd('/');
+            return Regex.IsMatch(address, @"/(v\d+[a-z0-9]*|openai)$", RegexOptions.IgnoreCase) ? address : address + "/v1";
+        }
+
+        // Big hosted servers that reject fields they don't know, so they never get the self-hosted thinking switch.
+        internal static bool Hosted(string key) { return Regex.IsMatch(HostOf(key), @"(^|\.)(cerebras\.ai|googleapis\.com|groq\.com|openrouter\.ai|uplinkswitch\.com|together\.xyz|fireworks\.ai|mistral\.ai|deepinfra\.com|venice\.ai|nano-gpt\.com)$", RegexOptions.IgnoreCase); }
+
+        // Free and cheap brains whose keys say who they are, so a bare key is enough: the server it belongs to, and its name.
+        internal static string Known(string key, out string name)
+        {
+            key = (key ?? "").Trim();
+            name = null;
+            if (key.StartsWith("csk-", StringComparison.Ordinal)) { name = "Cerebras"; return "https://api.cerebras.ai/v1"; }
+            if (key.StartsWith("AIza", StringComparison.Ordinal)) { name = "Gemini"; return "https://generativelanguage.googleapis.com/v1beta/openai"; }
+            if (key.StartsWith("gsk_", StringComparison.Ordinal)) { name = "Groq"; return "https://api.groq.com/openai/v1"; }
+            if (key.StartsWith("sk-or-", StringComparison.Ordinal)) { name = "OpenRouter"; return "https://openrouter.ai/api/v1"; }
+            return null;
+        }
         internal string Name { get { return Kind == "anthropic" ? "Claude" : Kind == "deepseek" ? "DeepSeek" : Kind == "nvidia" ? "NVIDIA" : Kind == "custom" ? "Your server" : "ChatGPT"; } }
         internal string Company { get { return Kind == "anthropic" ? "Anthropic" : Kind == "deepseek" ? "DeepSeek" : Kind == "nvidia" ? "NVIDIA" : Kind == "custom" ? HostOf(Key) : "OpenAI"; } }
 
@@ -304,24 +328,30 @@ namespace CapriDesktop
         internal volatile string Unsighted;
         internal int CloudWait = 45000;
 
-        // A second key to fall back on when the main cloud brain stops answering, and a short rest for the one that went quiet.
-        internal Func<Cloud> Spare;
+        // Other brains to fall back on, in order, when the one she's using stops answering, and a short rest for the one that went quiet.
+        internal Func<List<Cloud>> Spares;
         private static readonly Dictionary<string, DateTime> resting = new Dictionary<string, DateTime>();
         private static readonly HashSet<string> roomy = new HashSet<string>();
         internal static bool Cold(Cloud cloud)
         {
             if (cloud == null) return false;
-            lock (resting) { DateTime until; return resting.TryGetValue(cloud.Kind + "|" + cloud.Model, out until) && until > DateTime.UtcNow; }
+            lock (resting) { DateTime until; return resting.TryGetValue(cloud.Id, out until) && until > DateTime.UtcNow; }
         }
-        internal static void Chill(Cloud cloud, int minutes) { if (cloud != null) lock (resting) resting[cloud.Kind + "|" + cloud.Model] = DateTime.UtcNow.AddMinutes(minutes); }
+        internal static void Chill(Cloud cloud, double minutes) { if (cloud != null) lock (resting) resting[cloud.Id] = DateTime.UtcNow.AddMinutes(minutes); }
         internal static void Thaw() { lock (resting) resting.Clear(); }
-        internal bool Resting { get { return Cold(Remote); } }
-        private Cloud Another(Cloud than)
+        // Resting means her brain went quiet and nothing that can see is standing in for it, so screen looks wait.
+        internal bool Resting { get { Cloud remote = Remote; return Cold(remote) && Another(remote, true) == null; } }
+        internal Cloud Another(Cloud than, bool eyes = false)
         {
-            Func<Cloud> spare = Spare;
-            Cloud other = spare == null ? null : spare();
-            return other == null || other.Model == null || (than != null && other.Kind == than.Kind && other.Model == than.Model) || Cold(other) ? null : other;
+            Func<List<Cloud>> spares = Spares;
+            List<Cloud> all = spares == null ? null : spares();
+            if (all == null) return null;
+            foreach (Cloud other in all)
+                if (other != null && other.Model != null && (than == null || other.Id != than.Id) && !Cold(other) && (!eyes || Sighted(other.Model))) return other;
+            return null;
         }
+        // Models that take pictures, so a screen look can fall back to them.
+        internal static bool Sighted(string model) { return Regex.IsMatch(model ?? "", @"gemini|-vl\b|vl-|vision|gpt-4o|gpt-4\.1|gpt-[5-9]|claude|llama-4|gemma-?[34]|pixtral|omni", RegexOptions.IgnoreCase); }
 
         // Who she is lives in personality.md so anyone can rewrite her. This is her default, and the file starts as a copy of it.
         internal const string DefaultPersonality =
@@ -741,7 +771,7 @@ namespace CapriDesktop
 
         private static string Address(string kind, string path, string key = null)
         {
-            if (kind == "custom") return Cloud.BaseOf(key) + "/v1" + path;
+            if (kind == "custom") return Cloud.ApiOf(key) + path;
             if (kind == "anthropic") return Anthropic + "/v1" + path;
             if (kind == "deepseek") return DeepSeek + path;
             if (kind == "nvidia") return Nvidia + "/v1" + path;
@@ -759,6 +789,32 @@ namespace CapriDesktop
         {
             foreach (string id in NvidiaPicks) if (id != current && !skip.Contains(id) && (models == null || models.Contains(id))) return id;
             return null;
+        }
+
+        // The model a job brain uses on its key: the strongest free one each provider has, else the first.
+        internal static string JobModel(string key, List<string> models)
+        {
+            if (models == null || models.Count == 0) return null;
+            string host = Cloud.KindOf(key) == "custom" ? Cloud.HostOf(key) : "";
+            string[] wants = host.EndsWith("cerebras.ai") ? new[] { @"^gpt-oss-120b$", @"^qwen-3[\d.]*-235b", @"^zai-glm", @"^qwen-3", @"^llama" }
+                : host.EndsWith("googleapis.com") ? new[] { @"^(models/)?gemini-\d+(\.\d+)?-flash$", @"^(models/)?gemini-[\d.]+-flash(-\d+)?$", @"^(models/)?gemini-[\d.]+-flash-lite$" }
+                : host.EndsWith("groq.com") ? new[] { @"^openai/gpt-oss-120b$", @"kimi-k2", @"^qwen/qwen3", @"^openai/gpt-oss" }
+                : host.EndsWith("openrouter.ai") ? new[] { @"gpt-oss-120b:free$", @"deepseek.*:free$", @"qwen3-coder.*:free$", @"(kimi|glm).*:free$", @":free$" }
+                : new string[0];
+            foreach (string want in wants)
+            {
+                string best = null;
+                double bestVersion = -1;
+                foreach (string id in models)
+                {
+                    if (!Regex.IsMatch(id, want, RegexOptions.IgnoreCase) || Regex.IsMatch(id, @"preview|exp|tts|image|audio|live|embed", RegexOptions.IgnoreCase) && !Regex.IsMatch(want, "preview")) continue;
+                    Match v = Regex.Match(id, @"gemini-(\d+(\.\d+)?)");
+                    double version = v.Success ? double.Parse(v.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0;
+                    if (best == null || version > bestVersion) { best = id; bestVersion = version; }
+                }
+                if (best != null) return best.StartsWith("models/", StringComparison.Ordinal) ? best.Substring(7) : best;
+            }
+            return DefaultCloudModel(Cloud.KindOf(key), models);
         }
 
         internal static string DefaultCloudModel(string kind, List<string> models)
@@ -1022,7 +1078,7 @@ namespace CapriDesktop
         {
             Check(ticket);
             Cloud remote = Remote;
-            if (Cold(remote)) { Cloud next = Another(remote); if (next != null) remote = next; }
+            if (Cold(remote)) { Cloud next = Another(remote, parts != null); if (next != null) remote = next; }
             string listed = tools ? openAiTools ?? Hands.Tools : null;
             if (remote != null && remote.Claude) return AskClaude(remote, messages, tools, calls, parts, ticket, claudeTools);
             if (remote != null)
@@ -1038,16 +1094,16 @@ namespace CapriDesktop
                     Tokens = openAi ? (int?)null : brief ? Math.Max(256, limit) : Roomy(remote.Model) ? 8192 : 2000,
                     Effort = effort,
                     Thinking = remote.Kind == "deepseek" ? new CloudThinking() : null,
-                    Template = brief || remote.Kind == "custom" ? new CloudTemplate() : null
+                    Template = brief || (remote.Kind == "custom" && !Cloud.Hosted(remote.Key)) ? new CloudTemplate() : null
                 };
                 string address = Address(remote.Kind, "/chat/completions", remote.Key);
                 Action<HttpWebRequest> sign = delegate(HttpWebRequest request) { Sign(request, remote.Key, false); };
                 try { return Read(Send<CompletionReply>(address, body, CloudWait, listed, sign, parts, ticket), calls); }
                 catch (WebException error)
                 {
-                    // A brain that stops answering rests for a few minutes while her other key takes over.
+                    // A brain that stops answering rests for a few minutes while the next one takes over.
                     if (error.Status == WebExceptionStatus.RequestCanceled) throw;
-                    Cloud next = Another(remote);
+                    Cloud next = Another(remote, parts != null);
                     if (next == null) throw;
                     Chill(remote, 4);
                     Log(address, -1, remote.Model + " stopped answering, using " + next.Model + " for a few minutes");
@@ -1055,6 +1111,15 @@ namespace CapriDesktop
                 }
                 catch (BrainException error)
                 {
+                    // A busy, failing or missing model hands off too: a free key that hit its limit rests a minute.
+                    if (error.Message == Busy || error.Message == Down || error.Message == Gone)
+                    {
+                        Cloud next = Another(remote, parts != null);
+                        if (next == null) throw;
+                        Chill(remote, error.Message == Busy ? 1 : error.Message == Gone ? 60 : 4);
+                        Log(address, -1, remote.Model + ": " + error.Message + " Using " + next.Model + " for now");
+                        return Think(model, messages, tools, calls, parts, limit, ticket, routing, openAiTools, claudeTools);
+                    }
                     // A reasoning model that spends its whole budget thinking gets a bigger one, once, and keeps it.
                     if (error.Message.StartsWith("That model ran out of room", StringComparison.Ordinal) && !openAi && !brief && body.Tokens != 8192)
                     {
@@ -1127,12 +1192,15 @@ namespace CapriDesktop
         private static readonly Dictionary<string, string> efforts = new Dictionary<string, string>();
         private static readonly string[] EffortLevels = { "none", "minimal", "low", "medium", "high", "xhigh" };
 
-        private static bool Roomy(string model) { lock (roomy) return roomy.Contains(model); }
+        // Reasoning models think inside their answer budget, so they get a big one.
+        private static bool Roomy(string model) { if (Regex.IsMatch(model ?? "", @"gpt-oss|gemini-([3-9]|\d\d)|deepseek-r|reasoner|qwq|thinking", RegexOptions.IgnoreCase)) return true; lock (roomy) return roomy.Contains(model); }
 
         internal static string Effort(string model, bool openAi)
         {
             string taken;
             lock (efforts) if (efforts.TryGetValue(model, out taken)) return taken.Length == 0 ? null : taken;
+            if (Regex.IsMatch(model, @"gpt-oss", RegexOptions.IgnoreCase)) return "medium";
+            if (Regex.IsMatch(model, @"^(models/)?gemini-([3-9]|\d\d)", RegexOptions.IgnoreCase)) return "low";
             return openAi && Regex.IsMatch(model, @"^(gpt-5|o\d)") ? "low" : null;
         }
 

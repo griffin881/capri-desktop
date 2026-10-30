@@ -51,7 +51,7 @@ namespace CapriDesktop
         internal string Consult(string system, string user, int limit) { Seen.Add("CONSULT " + user); return Consults.Count > 0 ? Consults.Dequeue() : ""; }
         internal string Step(string system, string user, string tools, string claudeTools, string listing, List<KeyValuePair<string, ToolArguments>> calls, int limit = 400)
         {
-            Seen.Add("STEP " + user);
+            Seen.Add("STEP " + system + "\n" + user);
             object next = Steps.Count > 0 ? Steps.Dequeue() : "finish{\"action\":\"done\",\"text\":\"fallback\"}";
             if (next is KeyValuePair<string, ToolArguments>) { calls.Add((KeyValuePair<string, ToolArguments>)next); return ""; }
             return (string)next;

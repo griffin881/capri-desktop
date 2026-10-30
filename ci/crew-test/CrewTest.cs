@@ -60,6 +60,21 @@ namespace CapriDesktop
             Check(crew.Handle("jobs", new ToolArguments { Action = "stop", Name = "2" }).StartsWith("Stopping job 2"), "stop finds the running job");
             Gig stopped = Wait(crew, 1, 20);
             Check(stopped.Status == "stopped", "a stopped job ends at once (" + stopped.Status + ")");
+            // The key vault: a saved key reaches the command as an environment variable, and never shows up in what the worker sees, the log or the result.
+            Brain keyed = new Brain();
+            keyed.Consults.Enqueue("{\"title\":\"Key test\",\"worker\":\"terminal\",\"plan\":\"Using the vault.\"}");
+            keyed.Consults.Enqueue("{\"verdict\":\"pass\",\"notes\":\"\",\"report\":\"Keys work.\"}");
+            keyed.Steps.Enqueue(Call("run_powershell", new ToolArguments { Text = "'len ' + $env:TEST_VAULT_KEY.Length; 'key ' + $env:TEST_VAULT_KEY" }));
+            keyed.Steps.Enqueue("finish{\"action\":\"done\",\"text\":\"printed it\"}");
+            crew.Hire = delegate { return keyed; };
+            crew.Keys = delegate { return new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>("TEST_VAULT_KEY", "sk-supersecret-123456") }; };
+            crew.Handle("start_job", new ToolArguments { Task = "use my key", Kind = "terminal" });
+            Gig keyedGig = Wait(crew, 2, 60);
+            string keyedLog = string.Join("\n", crew.LogLines(keyedGig));
+            string keyedSeen = string.Join("\n", keyed.Seen.ToArray());
+            Check(keyedLog.Contains("len 21"), "a saved key reaches the command");
+            Check(!keyedLog.Contains("supersecret") && !keyedSeen.Contains("supersecret") && keyedSeen.Contains("[TEST_VAULT_KEY hidden]"), "a saved key never shows in the log or to the worker");
+            Check(keyedSeen.Contains("$env:TEST_VAULT_KEY"), "the worker is told the key's name");
             Console.WriteLine(fails == 0 ? "ALL PASS" : fails + " FAILED");
             return fails;
         }
