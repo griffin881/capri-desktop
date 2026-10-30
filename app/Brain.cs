@@ -292,6 +292,7 @@ namespace CapriDesktop
         private readonly List<HttpWebRequest> active = new List<HttpWebRequest>();
         private int cancelled;
         internal static string LogPath;
+        private static string lastLogged;
         internal volatile string Model;
         internal volatile Engine Local;
         internal volatile Pick LocalPick;
@@ -302,6 +303,25 @@ namespace CapriDesktop
         internal volatile Cloud Remote;
         internal volatile string Unsighted;
         internal int CloudWait = 45000;
+
+        // A second key to fall back on when the main cloud brain stops answering, and a short rest for the one that went quiet.
+        internal Func<Cloud> Spare;
+        private static readonly Dictionary<string, DateTime> resting = new Dictionary<string, DateTime>();
+        private static readonly HashSet<string> roomy = new HashSet<string>();
+        internal static bool Cold(Cloud cloud)
+        {
+            if (cloud == null) return false;
+            lock (resting) { DateTime until; return resting.TryGetValue(cloud.Kind + "|" + cloud.Model, out until) && until > DateTime.UtcNow; }
+        }
+        internal static void Chill(Cloud cloud, int minutes) { if (cloud != null) lock (resting) resting[cloud.Kind + "|" + cloud.Model] = DateTime.UtcNow.AddMinutes(minutes); }
+        internal static void Thaw() { lock (resting) resting.Clear(); }
+        internal bool Resting { get { return Cold(Remote); } }
+        private Cloud Another(Cloud than)
+        {
+            Func<Cloud> spare = Spare;
+            Cloud other = spare == null ? null : spare();
+            return other == null || other.Model == null || (than != null && other.Kind == than.Kind && other.Model == than.Model) || Cold(other) ? null : other;
+        }
 
         // Who she is lives in personality.md so anyone can rewrite her. This is her default, and the file starts as a copy of it.
         internal const string DefaultPersonality =
@@ -1002,6 +1022,7 @@ namespace CapriDesktop
         {
             Check(ticket);
             Cloud remote = Remote;
+            if (Cold(remote)) { Cloud next = Another(remote); if (next != null) remote = next; }
             string listed = tools ? openAiTools ?? Hands.Tools : null;
             if (remote != null && remote.Claude) return AskClaude(remote, messages, tools, calls, parts, ticket, claudeTools);
             if (remote != null)
@@ -1014,7 +1035,7 @@ namespace CapriDesktop
                     Model = remote.Model,
                     Messages = messages.ToArray(),
                     Limit = openAi ? 2000 : (int?)null,
-                    Tokens = openAi ? (int?)null : brief ? Math.Max(256, limit) : 2000,
+                    Tokens = openAi ? (int?)null : brief ? Math.Max(256, limit) : Roomy(remote.Model) ? 8192 : 2000,
                     Effort = effort,
                     Thinking = remote.Kind == "deepseek" ? new CloudThinking() : null,
                     Template = brief || remote.Kind == "custom" ? new CloudTemplate() : null
@@ -1022,8 +1043,25 @@ namespace CapriDesktop
                 string address = Address(remote.Kind, "/chat/completions", remote.Key);
                 Action<HttpWebRequest> sign = delegate(HttpWebRequest request) { Sign(request, remote.Key, false); };
                 try { return Read(Send<CompletionReply>(address, body, CloudWait, listed, sign, parts, ticket), calls); }
+                catch (WebException error)
+                {
+                    // A brain that stops answering rests for a few minutes while her other key takes over.
+                    if (error.Status == WebExceptionStatus.RequestCanceled) throw;
+                    Cloud next = Another(remote);
+                    if (next == null) throw;
+                    Chill(remote, 4);
+                    Log(address, -1, remote.Model + " stopped answering, using " + next.Model + " for a few minutes");
+                    return Think(model, messages, tools, calls, parts, limit, ticket, routing, openAiTools, claudeTools);
+                }
                 catch (BrainException error)
                 {
+                    // A reasoning model that spends its whole budget thinking gets a bigger one, once, and keeps it.
+                    if (error.Message.StartsWith("That model ran out of room", StringComparison.Ordinal) && !openAi && !brief && body.Tokens != 8192)
+                    {
+                        lock (roomy) roomy.Add(remote.Model);
+                        body.Tokens = 8192;
+                        return Read(Send<CompletionReply>(address, body, CloudWait, listed, sign, parts, ticket), calls);
+                    }
                     // A model that turns down its reasoning_effort, like gpt-6-luna with tools, gets the value its error names, once, and keeps it.
                     string taken = error.Told ? null : EffortFrom(error.Message, effort);
                     if (taken == null) throw;
@@ -1088,6 +1126,8 @@ namespace CapriDesktop
         // What each model takes for reasoning_effort, learned from errors. Empty means it takes none at all.
         private static readonly Dictionary<string, string> efforts = new Dictionary<string, string>();
         private static readonly string[] EffortLevels = { "none", "minimal", "low", "medium", "high", "xhigh" };
+
+        private static bool Roomy(string model) { lock (roomy) return roomy.Contains(model); }
 
         internal static string Effort(string model, bool openAi)
         {
@@ -1609,7 +1649,16 @@ namespace CapriDesktop
                 lock (typeof(Brain))
                 {
                     List<string> lines = File.Exists(path) ? new List<string>(File.ReadAllLines(path)) : new List<string>();
-                    lines.Add(line.Length > 300 ? line.Substring(0, 300) : line);
+                    string same = place + " | " + (what ?? "").Replace("\r", " ").Replace("\n", " ");
+                    if (lines.Count > 0 && lastLogged == same)
+                    {
+                        // The same thing again and again, like a dead server timing out every half minute, is one line with a count.
+                        Match counted = Regex.Match(lines[lines.Count - 1], @" \(x(\d+)(, last [\d:]+)?\)$");
+                        string kept = counted.Success ? lines[lines.Count - 1].Substring(0, counted.Index) : lines[lines.Count - 1];
+                        lines[lines.Count - 1] = kept + " (x" + (counted.Success ? int.Parse(counted.Groups[1].Value) + 1 : 2) + ", last " + DateTime.Now.ToString("HH:mm:ss") + ")";
+                    }
+                    else lines.Add(line.Length > 300 ? line.Substring(0, 300) : line);
+                    lastLogged = same;
                     if (lines.Count > 200) lines.RemoveRange(0, lines.Count - 200);
                     File.WriteAllLines(path, lines.ToArray());
                 }

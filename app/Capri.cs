@@ -998,6 +998,7 @@ namespace CapriDesktop
             }
             SplitKeys();
             brain.Remote = TierCloud();
+            brain.Spare = SpareCloud;
             ShowTiers();
             voice.VoiceId = string.IsNullOrEmpty(preferences.VoiceId) ? null : preferences.VoiceId;
             voice.Model = string.IsNullOrEmpty(preferences.VoiceModel) ? null : preferences.VoiceModel;
@@ -1184,6 +1185,8 @@ namespace CapriDesktop
             Brain hired = new Brain();
             Cloud remote = brain.Remote;
             hired.Remote = remote == null ? null : new Cloud(remote.Key, remote.Model);
+            hired.Spare = brain.Spare;
+            hired.CloudWait = 120000;
             hired.Local = brain.Local;
             hired.LocalPick = brain.LocalPick;
             hired.Model = brain.Model;
@@ -3175,7 +3178,7 @@ namespace CapriDesktop
         {
             if (!preferences.Watch || glancing) return;
             if (nextGlance < 0) nextGlance = now + Math.Min(20, GlanceGap);
-            if (now < nextGlance || quiet > 600000 || brain.Model == null || hidden || chatting || dragging || typer.Visible || talkState != TalkState.Off) return;
+            if (now < nextGlance || quiet > 600000 || brain.Model == null || brain.Resting || hidden || chatting || dragging || typer.Visible || talkState != TalkState.Off) return;
             nextGlance = now + GlanceGap * (0.8 + random.NextDouble() * 0.4);
             if (Unseeing() != null) return;
             byte[] shot;
@@ -3933,6 +3936,14 @@ namespace CapriDesktop
             preferences.Tier = textKey == null ? 0 : nvidia ? 1 : 2;
             preferences.Tiered = true;
             if (!testing) SavePreferences();
+        }
+
+        // The other key she has, if any: when the one she's using stops answering, this one takes over for a few minutes.
+        private Cloud SpareCloud()
+        {
+            string key = Voice.Unprotect(preferences.Tier == 1 ? preferences.PaidKey : preferences.Tier == 2 ? preferences.NvidiaKey : null);
+            string model = preferences.Tier == 1 ? preferences.PaidModel : preferences.Tier == 2 ? preferences.NvidiaModel : null;
+            return key == null || model == null ? null : new Cloud(key, model);
         }
 
         private Cloud TierCloud()
