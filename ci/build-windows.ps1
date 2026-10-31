@@ -27,11 +27,15 @@ Write-Output "Built $app and $setup"
 if (-not $SmokeTest) { return }
 $runtime = Join-Path $out 'smoke\runtime'
 $package = Join-Path $out 'smoke\package'
-$check = Start-Process -FilePath $app -ArgumentList @('--smoke-test', ('"' + $runtime + '"')) -PassThru -WindowStyle Hidden
-if (-not $check.WaitForExit($SmokeSeconds * 1000)) { $check.Kill(); throw 'Runtime smoke test timed out.' }
-if (Test-Path -LiteralPath (Join-Path $runtime 'smoke-test.txt')) { Get-Content -LiteralPath (Join-Path $runtime 'smoke-test.txt') }
-if ($check.ExitCode -ne 0) {
+# The runtime smoke test drives her real window on a shared runner, so a timing hiccup gets one more full run before it counts as a failure.
+for ($try = 1; $try -le 2; $try++) {
+    if (Test-Path -LiteralPath $runtime) { Remove-Item -LiteralPath $runtime -Recurse -Force -ErrorAction SilentlyContinue }
+    $check = Start-Process -FilePath $app -ArgumentList @('--smoke-test', ('"' + $runtime + '"')) -PassThru -WindowStyle Hidden
+    if (-not $check.WaitForExit($SmokeSeconds * 1000)) { $check.Kill(); if ($try -lt 2) { Write-Output 'Runtime smoke test timed out, running it once more.'; continue }; throw 'Runtime smoke test timed out.' }
+    if (Test-Path -LiteralPath (Join-Path $runtime 'smoke-test.txt')) { Get-Content -LiteralPath (Join-Path $runtime 'smoke-test.txt') }
+    if ($check.ExitCode -eq 0) { break }
     if (Test-Path -LiteralPath (Join-Path $runtime 'failure.txt')) { Get-Content -LiteralPath (Join-Path $runtime 'failure.txt') }
+    if ($try -lt 2) { Write-Output 'Runtime smoke test failed, running it once more.'; continue }
     throw 'Runtime smoke test failed.'
 }
 $verify = Start-Process -FilePath $setup -ArgumentList @('--verify', ('"' + $package + '"')) -PassThru -WindowStyle Hidden

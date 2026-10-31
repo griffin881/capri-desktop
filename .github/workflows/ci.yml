@@ -38,6 +38,7 @@ jobs:
           name: Capri-Setup
           path: out/windows/Capri-Setup.exe
       - name: Crew test
+        if: always()
         shell: pwsh
         run: |
           $failed = $false
