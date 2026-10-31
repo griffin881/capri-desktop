@@ -5923,6 +5923,7 @@ namespace CapriDesktop
             frames.Stop();
             signals.Stop();
             brain.Cancel();
+            if (crew != null) crew.Shutdown();
             StopChat();
             StopWakeWord();
             if (talkKey) Native.UnregisterHotKey(Handle, TalkKeyId);

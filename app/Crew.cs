@@ -88,8 +88,13 @@ namespace CapriDesktop
         private int next = 1;
         private static bool? openCode;
 
+        // Their connected apps (MCP servers), for the apps worker.
+        internal readonly Apps Apps;
+
         internal Crew(string data)
         {
+            Apps = new Apps(data);
+            Apps.Fill = Fill;
             bookPath = Path.Combine(data, "jobs.json");
             home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Capri Jobs");
             Load();
@@ -116,6 +121,7 @@ namespace CapriDesktop
             string blocked = Safety.Stops(ask);
             if (blocked != null) return blocked;
             Gig gig = new Gig { Ask = ask, Title = Shorten(ask), Worker = Pick(kind, ask), Status = "planning", Started = Now(), Log = new List<string>() };
+            if (WantsApps(kind, ask)) gig.Worker = "apps";
             try { string talk = Context(); if (!string.IsNullOrWhiteSpace(talk)) gig.Context = Tail(talk.Trim(), 2500); } catch (Exception) { }
             lock (gate) { gig.Id = (next++).ToString(CultureInfo.InvariantCulture); gigs.Add(gig); while (gigs.Count > 40) gigs.RemoveAt(0); }
             gig.Folder = FolderFor(gig, target);
@@ -194,6 +200,7 @@ namespace CapriDesktop
                     if (gig.Worker == "research") Research(gig, brain, notes);
                     else if (gig.Worker == "builder") Build(gig, notes);
                     else if (gig.Worker == "kaggle") Terminal(gig, brain, notes, KagglePrompt + KaggleState());
+                    else if (gig.Worker == "apps") AppsWork(gig, brain, notes);
                     else Terminal(gig, brain, notes);
                     if (gig.Stop) { Finish(gig, "stopped", "Stopped " + gig.Title + ". " + (gig.Result ?? "")); return; }
                     Set(gig, "reviewing");
@@ -229,14 +236,17 @@ namespace CapriDesktop
             "- kaggle: anything on Kaggle. Runs and sets up their Kaggle notebooks on Kaggle's free GPUs from this PC with the kaggle command: making or editing a notebook, starting a run, checking on it, getting its output, downloading a model onto Kaggle.\n" +
             "- research: searches the web and reads pages, then writes up notes.\n" +
             "- builder: OpenCode, a coding agent that writes and edits code in a project folder.\n" +
-            "Reply with only JSON, no other text: {\"title\": \"a short name for the job, 2 to 5 words\", \"worker\": \"terminal|kaggle|research|builder\", \"plan\": \"what Capri says out loud about the plan\"}.\n" +
+            "- apps: works inside their connected apps (listed below, like a real web browser or GitHub) through the apps' own tools, plus PowerShell. Anything that needs clicking around a website, signing into a site, or one of those apps goes here.\n" +
+            "Reply with only JSON, no other text: {\"title\": \"a short name for the job, 2 to 5 words\", \"worker\": \"terminal|kaggle|research|builder|apps\", \"plan\": \"what Capri says out loud about the plan\"}.\n" +
             "Use the talk around the job to work out what they really meant (which thing, where), and plan for that.\n" +
             "The plan is Capri talking to them, casual and in first person, one or two sentences: what she's putting which worker on and how it'll go, and which brain is doing the thinking. " +
             "Talk like a friend, not an assistant: no lists, no step numbers, no 'I will now', no 'Certainly', no 'Here's the plan'. Vary how you start it.";
 
         private void PlanIt(Gig gig, Brain brain)
         {
+            List<string> apps = Apps.Names;
             string user = "Their job: " + Asked(gig) + "\nWorker that looks right: " + gig.Worker + (HasOpenCode ? "" : " (OpenCode isn't installed, so no builder)") +
+                "\nConnected apps: " + (apps.Count == 0 ? "none, so no apps worker" : string.Join(", ", apps.ToArray())) +
                 "\nBrain doing the thinking: " + gig.Mind + "\nJob folder: " + gig.Folder;
             GigPlan plan = null;
             try { plan = ParseJson<GigPlan>(brain.Consult(PlanPrompt, user, 300)); }
@@ -245,7 +255,7 @@ namespace CapriDesktop
             {
                 if (!string.IsNullOrWhiteSpace(plan.Title)) gig.Title = Shorten(plan.Title);
                 string worker = (plan.Worker ?? "").Trim().ToLowerInvariant();
-                if (worker == "terminal" || worker == "kaggle" || worker == "research" || (worker == "builder" && HasOpenCode)) gig.Worker = worker;
+                if (worker == "terminal" || worker == "kaggle" || worker == "research" || (worker == "builder" && HasOpenCode) || (worker == "apps" && apps.Count > 0)) gig.Worker = worker;
                 if (!string.IsNullOrWhiteSpace(plan.Plan)) gig.Plan = Brain.Visible(plan.Plan).Trim();
             }
             if (string.IsNullOrWhiteSpace(gig.Plan)) gig.Plan = "Putting my " + WorkerName(gig.Worker) + " worker on " + gig.Title + ", with " + gig.Mind + " doing the thinking. I'll tell you when it's done.";
@@ -267,7 +277,7 @@ namespace CapriDesktop
 
         private void Terminal(Gig gig, Brain brain, string notes, string extra = null)
         {
-            string prompt = TerminalPrompt + KeysNote() + (extra ?? "");
+            string prompt = TerminalPrompt + KeysNote() + AppsNote() + (extra ?? "");
             List<string> steps = new List<string>();
             int most = StepsFor(brain);
             bool cloud = brain.Remote != null;
@@ -662,6 +672,13 @@ namespace CapriDesktop
             return text;
         }
 
+        // Where their apps are listed, so "add the Spotify app" can be a terminal job.
+        private string AppsNote()
+        {
+            return "\nTheir connected apps (MCP servers) are listed in " + Apps.Path + ", in Claude Desktop's format: {\"mcpServers\": {\"name\": {\"command\": \"npx\", \"args\": [...], \"env\": {...}}}} or {\"url\": ..., \"headers\": {...}} for a link. " +
+                "To add an app, read that file, add its entry and keep the others; for a token, use ${NAME} with the name of one of their saved keys instead of the value. Most apps need Node.js (winget install OpenJS.NodeJS.LTS) or uv (winget install astral-sh.uv).";
+        }
+
         // What the worker is told about the vault: names only, never values.
         private string KeysNote()
         {
@@ -737,8 +754,11 @@ namespace CapriDesktop
             string json = found.Groups[2].Value;
             int depth = 0, end = -1;
             for (int i = 0; i < json.Length; i++) { if (json[i] == '{') depth++; else if (json[i] == '}' && --depth == 0) { end = i; break; } }
-            args = Hands.Read(end > 0 ? json.Substring(0, end + 1) : json);
+            string raw = end > 0 ? json.Substring(0, end + 1) : json;
+            args = Hands.Read(raw);
+            if (args == null && found.Groups[1].Value.Contains("__")) args = new ToolArguments();
             if (args == null) return false;
+            args.Raw = raw;
             tool = found.Groups[1].Value;
             return true;
         }
@@ -780,7 +800,87 @@ namespace CapriDesktop
             return "terminal";
         }
 
-        internal static string WorkerName(string worker) { return worker == "research" ? "research" : worker == "builder" ? "OpenCode builder" : worker == "kaggle" ? "Kaggle" : "terminal"; }
+        internal static string WorkerName(string worker) { return worker == "research" ? "research" : worker == "builder" ? "OpenCode builder" : worker == "kaggle" ? "Kaggle" : worker == "apps" ? "apps" : "terminal"; }
+
+        // An apps job: asked for by kind, or about one of their connected apps, or about clicking around a website when the browser is connected.
+        private bool WantsApps(string kind, string ask)
+        {
+            string k = (kind ?? "").Trim().ToLowerInvariant();
+            List<string> apps = Apps.Names;
+            if (apps.Count == 0) return false;
+            if (k == "apps") return true;
+            if (k.Length > 0 && k != "auto") return false;
+            foreach (string app in apps) if (app.Length >= 3 && Regex.IsMatch(ask ?? "", @"\b" + Regex.Escape(app) + @"\b", RegexOptions.IgnoreCase)) return true;
+            return apps.Contains("browser") && Regex.IsMatch(ask ?? "", @"\b(in (the|my|a) browser|on (the|that) (site|website|page)|fill (in|out)|sign (in|up) (to|on|for)|log ?in to|click (on )?|book (a|an|me)|order (a|an|me)|buy (a|an|me)|apply (for|to))\b", RegexOptions.IgnoreCase);
+        }
+
+        // ${NAME} in apps.json is a saved key from the vault, or else an environment variable.
+        private string Fill(string text)
+        {
+            if (string.IsNullOrEmpty(text) || text.IndexOf("${", StringComparison.Ordinal) < 0) return text;
+            List<KeyValuePair<string, string>> keys = SavedKeys();
+            return Regex.Replace(text, @"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", delegate(Match m)
+            {
+                foreach (KeyValuePair<string, string> key in keys) if (string.Equals(key.Key, m.Groups[1].Value, StringComparison.OrdinalIgnoreCase)) return key.Value;
+                return Environment.GetEnvironmentVariable(m.Groups[1].Value) ?? "";
+            });
+        }
+
+        internal void Shutdown() { try { Apps.StopAll(); } catch (Exception) { } }
+
+        // ---- the apps worker -------------------------------------------------------------------------------
+
+        private const string AppsPrompt =
+            "You are the apps worker in Capri's crew. You get one job done for the user inside their connected apps, through each app's own tools (every tool's name starts with its app), plus PowerShell on their Windows PC when you need it, one tool call per reply.\n" +
+            "Read each tool's result before the next step, and use what it shows you: in the browser, look at the page snapshot to find what to click or type into. Don't guess at buttons or links you haven't seen.\n" +
+            "Never buy, pay, send money, delete something or post publicly unless the job clearly says to. If a site or app needs them, like signing in, a code sent to their phone, a captcha or a payment, stop and call finish with action failed and say exactly what they need to do.\n" +
+            "Check your work before you finish. Then call finish with action done and what you did, what you found and what they need to know, in plain words.";
+
+        private void AppsWork(Gig gig, Brain brain, string notes)
+        {
+            List<AppTool> tools = Apps.Ready(delegate(string line) { Note(gig, line); });
+            if (tools.Count == 0) { gig.Result = "None of their apps started, so this couldn't be done. See the log on the jobs board."; return; }
+            List<string> named = new List<string>();
+            foreach (AppTool t in tools) if (!named.Contains(t.App)) named.Add(t.App);
+            Note(gig, "Apps ready: " + tools.Count + " tools from " + string.Join(", ", named.ToArray()));
+            int extra = TerminalTools.GetLength(0) - 1;
+            string[,] specs = new string[tools.Count + extra + 1, 3];
+            for (int i = 0; i < extra; i++) for (int j = 0; j < 3; j++) specs[i, j] = TerminalTools[i, j];
+            Dictionary<string, AppTool> byName = new Dictionary<string, AppTool>();
+            for (int i = 0; i < tools.Count; i++)
+            {
+                specs[extra + i, 0] = tools[i].Exposed;
+                specs[extra + i, 1] = "[" + tools[i].App + "] " + tools[i].Description;
+                specs[extra + i, 2] = tools[i].Schema;
+                byName[tools[i].Exposed] = tools[i];
+            }
+            for (int j = 0; j < 3; j++) specs[tools.Count + extra, j] = TerminalTools[extra, j];
+            string prompt = AppsPrompt + KeysNote();
+            string openAi = Render(specs, false), claude = Render(specs, true), listing = Listing(specs);
+            List<string> steps = new List<string>();
+            int most = StepsFor(brain);
+            bool cloud = brain.Remote != null;
+            for (int step = 0; step < most && !gig.Stop; step++)
+            {
+                List<KeyValuePair<string, ToolArguments>> calls = new List<KeyValuePair<string, ToolArguments>>();
+                string written = brain.Step(prompt, Brief(gig, notes, steps, cloud ? 4 : 3, cloud ? 24000 : 6500, most), openAi, claude, listing, calls, 900);
+                string tool;
+                ToolArguments args;
+                if (!Pick(calls, written, out tool, out args)) { steps.Add("(You replied without a tool call. Call exactly one tool.)"); continue; }
+                if (tool == "finish") { gig.Result = Clean(args.Text, "Done."); if (args.Action == "failed") Note(gig, "Worker says it can't finish: " + gig.Result); return; }
+                string outcome;
+                AppTool app;
+                if (byName.TryGetValue(tool, out app))
+                {
+                    Note(gig, app.App + " > " + app.Name + " " + Trim(Hide(args.Raw ?? "{}"), 300));
+                    outcome = Hide(Apps.Call(app, args.Raw, 180000));
+                    Note(gig, Trim(outcome, 400));
+                }
+                else outcome = Hide(Act(gig, tool, args));
+                steps.Add(tool + " " + Trim(args.Raw ?? Describe(tool, args), 400) + "\n" + Trim(outcome, cloud ? 9000 : 1500));
+            }
+            if (!gig.Stop && gig.Result == null) gig.Result = "Ran out of steps before finishing.";
+        }
 
         // ---- Kaggle ------------------------------------------------------------------------------------------
 
@@ -961,7 +1061,7 @@ namespace CapriDesktop
         private readonly Crew crew;
         private readonly ListBox list = new ListBox();
         private readonly TextBox details = new TextBox();
-        private readonly Button stop = new Button(), open = new Button(), clear = new Button(), saveKey = new Button(), forgetKey = new Button(), saveModel = new Button(), saveKaggle = new Button();
+        private readonly Button stop = new Button(), open = new Button(), clear = new Button(), apps = new Button(), saveKey = new Button(), forgetKey = new Button(), saveModel = new Button(), saveKaggle = new Button();
         private readonly TextBox keyBox = new TextBox(), model = new TextBox(), kaggle = new TextBox();
         private readonly ComboBox saved = new ComboBox();
         private readonly Label keysLabel = new Label(), savedLabel = new Label(), modelLabel = new Label(), kaggleLabel = new Label(), status = new Label();
@@ -992,7 +1092,7 @@ namespace CapriDesktop
             list.SelectedIndexChanged += delegate { Display(Selected); };
             details.Multiline = true; details.ReadOnly = true; details.ScrollBars = ScrollBars.Vertical; details.WordWrap = true;
             details.BackColor = Panel; details.ForeColor = Ink; details.BorderStyle = BorderStyle.None;
-            foreach (Button b in new[] { stop, open, clear, saveKey, forgetKey, saveModel, saveKaggle })
+            foreach (Button b in new[] { stop, open, clear, apps, saveKey, forgetKey, saveModel, saveKaggle })
             {
                 b.FlatStyle = FlatStyle.Flat; b.FlatAppearance.BorderColor = Color.FromArgb(60, 64, 78); b.BackColor = Panel; b.ForeColor = Ink;
             }
@@ -1000,6 +1100,24 @@ namespace CapriDesktop
             stop.Click += delegate { Gig g = Selected; if (g != null && !g.Finished) crew.Stop(g); };
             open.Click += delegate { Gig g = Selected; string folder = g != null ? g.Folder : crew.Home; try { Directory.CreateDirectory(folder); Process.Start("explorer.exe", "\"" + folder + "\""); } catch (Exception) { } };
             clear.Click += delegate { crew.Clear(); };
+            apps.Text = "Apps \u25BE";
+            apps.Click += delegate
+            {
+                ContextMenuStrip menu = new ContextMenuStrip();
+                List<string> have = crew.Apps.Names;
+                for (int i = 0; i < Apps.Presets.GetLength(0); i++)
+                {
+                    string name = Apps.Presets[i, 0], about = Apps.Presets[i, 1];
+                    ToolStripMenuItem item = new ToolStripMenuItem((have.Contains(name) ? "\u2713 " : "Add ") + name + "  \u2014  " + about) { Enabled = !have.Contains(name) };
+                    item.Click += delegate { keySaid = crew.Apps.Add(name); Reload(); };
+                    menu.Items.Add(item);
+                }
+                menu.Items.Add(new ToolStripSeparator());
+                ToolStripMenuItem edit = new ToolStripMenuItem("Edit apps.json (paste any MCP server's config here)");
+                edit.Click += delegate { crew.Apps.Open(); };
+                menu.Items.Add(edit);
+                menu.Show(apps, new Point(0, apps.Height));
+            };
             keysLabel.ForeColor = Dim; keysLabel.AutoSize = false;
             keyBox.BackColor = Panel; keyBox.ForeColor = Ink; keyBox.BorderStyle = BorderStyle.FixedSingle; keyBox.UseSystemPasswordChar = true;
             keyBox.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; saveKey.PerformClick(); } };
@@ -1030,7 +1148,7 @@ namespace CapriDesktop
             kaggle.BackColor = Panel; kaggle.ForeColor = Ink; kaggle.BorderStyle = BorderStyle.FixedSingle; kaggle.UseSystemPasswordChar = true;
             saveKaggle.Click += delegate { string said = Crew.SaveKaggle(kaggle.Text); kaggle.Text = ""; Reload(); kaggleLabel.Text = said; };
             status.ForeColor = Dim; status.AutoSize = false;
-            Controls.AddRange(new Control[] { list, details, stop, open, clear, keysLabel, keyBox, saveKey, savedLabel, saved, forgetKey, modelLabel, model, saveModel, kaggleLabel, kaggle, saveKaggle, status });
+            Controls.AddRange(new Control[] { list, details, stop, open, clear, apps, keysLabel, keyBox, saveKey, savedLabel, saved, forgetKey, modelLabel, model, saveModel, kaggleLabel, kaggle, saveKaggle, status });
             Resize += delegate { Arrange(); };
             Arrange();
             Reload();
@@ -1048,7 +1166,8 @@ namespace CapriDesktop
             stop.Bounds = new Rectangle(pad, by, 100, 28);
             open.Bounds = new Rectangle(pad + 108, by, 110, 28);
             clear.Bounds = new Rectangle(pad + 226, by, 120, 28);
-            status.Bounds = new Rectangle(pad + 356, by + 6, w - pad * 2 - 356, 20);
+            apps.Bounds = new Rectangle(pad + 354, by, 80, 28);
+            status.Bounds = new Rectangle(pad + 444, by + 6, w - pad * 2 - 444, 20);
             keysLabel.Bounds = new Rectangle(pad, h - bottom + 2, w - pad * 2, 48);
             keyBox.Bounds = new Rectangle(pad, h - bottom + 52, w - pad * 2 - 80, 24);
             saveKey.Bounds = new Rectangle(w - pad - 72, h - bottom + 50, 72, 28);
@@ -1095,7 +1214,8 @@ namespace CapriDesktop
                 "Any other key: put its name first, like UPLINK_API_KEY sk-... Workers use keys without ever seeing them.";
             kaggleLabel.Text = Crew.KaggleReady ? "Kaggle: key saved, so her Kaggle worker is signed in. Paste a new token here to replace it." : "Kaggle API token: get one at kaggle.com/settings/api (Generate New Token) and paste it here, so her Kaggle worker can run your notebooks.";
             int running = all.FindAll(g => !g.Finished).Count;
-            status.Text = running == 0 ? "Nothing running." + (Crew.HasOpenCode ? " OpenCode: found." : " OpenCode: not found on PATH.") : running + " running." + (Crew.HasOpenCode ? " OpenCode: found." : "");
+            List<string> connected = crew.Apps.Names;
+            status.Text = (running == 0 ? "Nothing running." : running + " running.") + " Apps: " + (connected.Count == 0 ? "none" : string.Join(", ", connected.ToArray())) + "." + (Crew.HasOpenCode ? "" : " OpenCode: not found.");
         }
 
         private void Display(Gig g)

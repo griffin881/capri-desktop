@@ -1233,13 +1233,22 @@ namespace CapriDesktop
             return Read(reply, calls);
         }
 
+        // A tool call's arguments, keeping the raw JSON; an app tool (app__tool) keeps it even when it isn't the shape her own tools take.
+        private static ToolArguments Raw(string name, string json)
+        {
+            ToolArguments args = Hands.Read(json);
+            if (args == null && (name ?? "").Contains("__")) args = new ToolArguments();
+            if (args != null) args.Raw = json;
+            return args;
+        }
+
         private static string Read(CompletionReply reply, List<KeyValuePair<string, ToolArguments>> calls)
         {
             CompletionChoice choice = reply != null && reply.Choices != null && reply.Choices.Length > 0 ? reply.Choices[0] : null;
             CompletionMessage message = choice != null ? choice.Message : null;
             if (message == null) throw new BrainException("My brain sent an empty reply. Try again or pick another model in Capri Mainframe.", true);
             int before = calls.Count;
-            if (message.Calls != null) foreach (CompletionCall call in message.Calls) if (call != null && call.Function != null) calls.Add(new KeyValuePair<string, ToolArguments>(call.Function.Name, Hands.Read(call.Function.Arguments)));
+            if (message.Calls != null) foreach (CompletionCall call in message.Calls) if (call != null && call.Function != null) calls.Add(new KeyValuePair<string, ToolArguments>(call.Function.Name, Raw(call.Function.Name, call.Function.Arguments)));
             if (calls.Count == before && Garbled(message.Content)) throw new BrainException(Gibberish, true);
             if (Clean(message.Content).Length == 0 && calls.Count == before)
             {

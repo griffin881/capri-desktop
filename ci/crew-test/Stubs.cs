@@ -20,6 +20,7 @@ namespace CapriDesktop
         [DataMember(Name = "target")] public string Target;
         [DataMember(Name = "text")] public string Text;
         [DataMember(Name = "seconds")] public string Seconds;
+        internal string Raw;
     }
     internal sealed class Cloud { internal string Model = "m", Kind = "custom", Company = "host", Name = "Your server"; }
     internal static class Voice
