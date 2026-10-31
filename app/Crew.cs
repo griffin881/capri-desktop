@@ -621,8 +621,9 @@ namespace CapriDesktop
                 string fallback = JobCodeModel == null ? null : JobCodeModel();
                 model = fallback;
             }
-            string line = "opencode run --auto --format json --dir " + Arg(gig.Folder) + " --title " + Arg(gig.Title) + (string.IsNullOrWhiteSpace(model) ? "" : " --model " + Arg(model.Trim())) +
-                (session != null ? " --session " + Arg(session) : "") + " --file " + Arg(briefPath) + " " + Arg(message);
+            // The message goes first: --file takes every word after it as another file.
+            string line = "opencode run " + Arg(message) + " --auto --format json --dir " + Arg(gig.Folder) + " --title " + Arg(gig.Title) + (string.IsNullOrWhiteSpace(model) ? "" : " --model " + Arg(model.Trim())) +
+                (session != null ? " --session " + Arg(session) : "") + " --file " + Arg(briefPath);
             Note(gig, "OpenCode is coding in " + gig.Folder + (string.IsNullOrWhiteSpace(model) ? "" : " with " + (model.StartsWith("capri/", StringComparison.Ordinal) ? "her coding brains" : model.Trim())));
             string last = null;
             int code = Stream(gig, line, gig.Folder, 3600, extra, delegate(string output)
@@ -657,11 +658,28 @@ namespace CapriDesktop
 
         private bool IsGit(string folder) { return Directory.Exists(Path.Combine(folder, ".git")) || File.Exists(Path.Combine(folder, ".git")); }
 
+        // git itself, not through PowerShell, which turns git's chatter on stderr into errors. Null when it fails.
         private string Git(Gig gig, string args, int seconds = 60)
         {
-            int code;
-            string output = Shell(gig, "git " + args + " 2>&1", gig.Folder, seconds, out code);
-            return code == 0 ? output.Trim() : null;
+            try
+            {
+                ProcessStartInfo start = new ProcessStartInfo("git", args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = gig.Folder };
+                start.StandardOutputEncoding = new UTF8Encoding(false);
+                start.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
+                using (Process git = new Process { StartInfo = start })
+                {
+                    StringBuilder output = new StringBuilder();
+                    git.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) lock (output) output.AppendLine(e.Data); };
+                    git.ErrorDataReceived += delegate { };
+                    git.Start();
+                    git.BeginOutputReadLine();
+                    git.BeginErrorReadLine();
+                    if (!git.WaitForExit(seconds * 1000)) { Kill(git); return null; }
+                    git.WaitForExit();
+                    lock (output) return git.ExitCode == 0 ? output.ToString().Trim() : null;
+                }
+            }
+            catch (Exception) { return null; }
         }
 
         // Its own branch, so nothing lands on theirs until they say so. A new project in her jobs folder becomes a repo first.
@@ -738,7 +756,7 @@ namespace CapriDesktop
         {
             if (gig.Branch == null || !gig.WasClean || !IsGit(gig.Folder)) return;
             Git(gig, "add -A");
-            string done = Git(gig, "-c user.name=Capri -c user.email=capri@localhost commit -q -m " + Quote("capri: " + gig.Title));
+            string done = Git(gig, "-c user.name=Capri -c user.email=capri@localhost commit -q -m " + Arg("capri: " + gig.Title));
             string hash = Git(gig, "rev-parse --short HEAD");
             if (done != null && hash != null) Note(gig, "Committed " + hash + " on " + gig.Branch + ".");
             NoteProject(gig);
