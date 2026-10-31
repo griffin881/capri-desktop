@@ -364,6 +364,12 @@ namespace CapriDesktop
             Process started = new Process { StartInfo = start, EnableRaisingEvents = true };
             started.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data == null) return; lock (errors) { errors.AppendLine(e.Data); if (errors.Length > 8000) errors.Remove(0, errors.Length - 8000); } };
             started.Exited += delegate { Fail("it closed"); };
+            // Each line it prints is one message; read the same way her terminal worker reads PowerShell.
+            started.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
+            {
+                if (e.Data == null) { Fail("it stopped answering"); return; }
+                Line(e.Data);
+            };
             started.Start();
             started.BeginErrorReadLine();
             lock (gate)
@@ -371,8 +377,7 @@ namespace CapriDesktop
                 process = started;
                 input = new StreamWriter(started.StandardInput.BaseStream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
             }
-            Thread reader = new Thread(delegate() { Read(started); }) { IsBackground = true, Name = "Capri app " + Name };
-            reader.Start();
+            started.BeginOutputReadLine();
         }
 
         private static string Arg(string arg)
@@ -381,23 +386,18 @@ namespace CapriDesktop
             return "\"" + arg.Replace("\"", "\\\"") + "\"";
         }
 
-        private void Read(Process from)
+        private void Line(string text)
         {
             try
             {
-                string text;
-                while ((text = from.StandardOutput.ReadLine()) != null)
-                {
-                    text = text.Trim();
-                    Interlocked.Increment(ref heard);
-                    if (text.Length == 0 || text[0] != '{') continue;
-                    Dictionary<string, object> message;
-                    try { message = AppJson.Object(text); } catch (FormatException) { continue; }
-                    if (message != null) Take(message, true);
-                }
+                text = text.Trim();
+                Interlocked.Increment(ref heard);
+                if (text.Length == 0 || text[0] != '{') return;
+                Dictionary<string, object> message;
+                try { message = AppJson.Object(text); } catch (FormatException) { return; }
+                if (message != null) Take(message, true);
             }
-            catch (Exception) { }
-            Fail("it stopped answering");
+            catch (Exception error) { lock (errors) errors.AppendLine("Capri couldn't read a line: " + error.Message); }
         }
 
         // A reply goes to whoever's waiting on it; a server asking something of us gets a short answer.

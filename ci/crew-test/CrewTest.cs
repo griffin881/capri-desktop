@@ -48,6 +48,7 @@ namespace CapriDesktop
                 else r["error"] = new Dictionary<string, object> { { "code", -32601 }, { "message", "nope" } };
                 Console.Out.WriteLine(AppJson.Write(r));
                 Console.Out.Flush();
+                Console.Error.WriteLine("fake: answered " + method);
             }
             return 0;
         }
