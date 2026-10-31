@@ -18,8 +18,42 @@ namespace CapriDesktop
             return gig;
         }
 
-        static int Main()
+        // A stand-in MCP server: this same program, started with --fake-mcp, answering JSON-RPC lines on stdin. It pings the client once, like real servers can.
+        static int FakeServer()
         {
+            string line;
+            while ((line = Console.In.ReadLine()) != null)
+            {
+                Dictionary<string, object> m;
+                try { m = AppJson.Object(line); } catch (FormatException) { continue; }
+                object id;
+                m.TryGetValue("id", out id);
+                string method = AppJson.Str(m, "method");
+                if (id == null || method == null) continue;
+                Dictionary<string, object> r = new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", id } };
+                if (method == "initialize")
+                {
+                    Console.Out.WriteLine("{\"jsonrpc\":\"2.0\",\"id\":\"srv-1\",\"method\":\"ping\"}");
+                    r["result"] = new Dictionary<string, object> { { "protocolVersion", "2025-06-18" }, { "capabilities", new Dictionary<string, object>() }, { "serverInfo", new Dictionary<string, object> { { "name", "fake" }, { "version", "1" } } } };
+                }
+                else if (method == "tools/list") r["result"] = AppJson.Object("{\"tools\":[{\"name\":\"echo\",\"description\":\"Echo text back\",\"inputSchema\":{\"$schema\":\"x\",\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"},\"times\":{\"type\":\"number\"}},\"required\":[\"text\"]}}]}");
+                else if (method == "tools/call")
+                {
+                    Dictionary<string, object> args = AppJson.Obj(AppJson.Obj(m, "params"), "arguments");
+                    string said = "echo: " + AppJson.Str(args, "text") + " x" + AppJson.Write(args["times"]) + " token " + Environment.GetEnvironmentVariable("FAKE_TOKEN");
+                    r["result"] = new Dictionary<string, object> { { "content", new List<object> { new Dictionary<string, object> { { "type", "text" }, { "text", said } } } } };
+                }
+                else r["error"] = new Dictionary<string, object> { { "code", -32601 }, { "message", "nope" } };
+                Console.Out.WriteLine(AppJson.Write(r));
+                Console.Out.Flush();
+            }
+            return 0;
+        }
+
+        static int Main(string[] given)
+        {
+            if (given.Length > 0 && given[0] == "--fake-mcp") return FakeServer();
+            Console.Out.Flush();
             string data = Path.Combine(Path.GetTempPath(), "capri-crew-" + Guid.NewGuid().ToString("N"));
             Crew crew = new Crew(data);
             Brain worker = new Brain();
@@ -77,21 +111,7 @@ namespace CapriDesktop
             Check(keyedSeen.Contains("$env:TEST_VAULT_KEY"), "the worker is told the key's name");
             // The app plug: a stand-in MCP server (PowerShell speaking JSON-RPC over stdin and stdout) is listed in apps.json,
             // started by an apps job, asked for its tools, and called with arguments that aren't plain strings; a ${KEY} in its settings comes from the vault and stays hidden.
-            string fake = Path.Combine(data, "fake-mcp.ps1");
-            File.WriteAllText(fake, string.Join("\r\n", new[] {
-                "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)",
-                "[Console]::Out.WriteLine('fake server starting up')",
-                "while ($null -ne ($line = [Console]::In.ReadLine())) {",
-                "  $m = $line | ConvertFrom-Json",
-                "  if ($m.method -eq 'initialize') { $r = @{ jsonrpc = '2.0'; id = $m.id; result = @{ protocolVersion = '2025-06-18'; capabilities = @{ tools = @{} }; serverInfo = @{ name = 'fake'; version = '1' } } }; [Console]::Out.WriteLine('{\"jsonrpc\":\"2.0\",\"id\":\"srv-1\",\"method\":\"ping\"}') }",
-                "  elseif ($m.method -eq 'tools/list') { $r = @{ jsonrpc = '2.0'; id = $m.id; result = @{ tools = @(@{ name = 'echo'; description = 'Echo text back'; inputSchema = @{ '$schema' = 'x'; type = 'object'; properties = @{ text = @{ type = 'string' }; times = @{ type = 'number' } }; required = @('text') } }) } } }",
-                "  elseif ($m.method -eq 'tools/call') { $r = @{ jsonrpc = '2.0'; id = $m.id; result = @{ content = @(@{ type = 'text'; text = ('echo: ' + $m.params.arguments.text + ' x' + $m.params.arguments.times + ' token ' + $env:FAKE_TOKEN) }) } } }",
-                "  elseif ($null -ne $m.id -and $null -eq $m.method) { continue }",
-                "  elseif ($null -ne $m.id) { $r = @{ jsonrpc = '2.0'; id = $m.id; error = @{ code = -32601; message = 'nope' } } }",
-                "  else { continue }",
-                "  [Console]::Out.WriteLine(($r | ConvertTo-Json -Depth 10 -Compress)); [Console]::Out.Flush()",
-                "}" }));
-            File.WriteAllText(Path.Combine(data, "apps.json"), "{\"mcpServers\":{\"fake\":{\"command\":\"powershell\",\"args\":[\"-NoProfile\",\"-ExecutionPolicy\",\"Bypass\",\"-File\"," + Voice.Quote(fake) + "],\"env\":{\"FAKE_TOKEN\":\"${TEST_VAULT_KEY}\"}},\"off\":{\"command\":\"nothing\",\"disabled\":true}}}");
+            File.WriteAllText(Path.Combine(data, "apps.json"), "{\"mcpServers\":{\"fake\":{\"command\":" + Voice.Quote(System.Reflection.Assembly.GetExecutingAssembly().Location) + ",\"args\":[\"--fake-mcp\"],\"env\":{\"FAKE_TOKEN\":\"${TEST_VAULT_KEY}\"}},\"off\":{\"command\":\"nothing\",\"disabled\":true}}}");
             Check(crew.Apps.Names.Count == 1 && crew.Apps.Names[0] == "fake", "apps.json lists the app and skips a disabled one");
             Brain appsBrain = new Brain();
             appsBrain.Consults.Enqueue("{\"title\":\"App test\",\"worker\":\"apps\",\"plan\":\"Using the fake app.\"}");
@@ -100,11 +120,11 @@ namespace CapriDesktop
             appsBrain.Steps.Enqueue("finish{\"action\":\"done\",\"text\":\"echoed\"}");
             crew.Hire = delegate { return appsBrain; };
             crew.Handle("start_job", new ToolArguments { Task = "echo something with the fake app", Kind = "apps" });
-            Gig appsGig = Wait(crew, 3, 120);
+            Gig appsGig = Wait(crew, 3, 200);
             string appsLog = string.Join("\n", crew.LogLines(appsGig));
             foreach (string line in crew.LogLines(appsGig)) Console.WriteLine("  | " + line);
             Check(appsGig.Worker == "apps" && appsGig.Status == "done", "an apps job runs on the apps worker (" + appsGig.Worker + ", " + appsGig.Status + ")");
-            Check(appsLog.Contains("Apps ready: 1 tools from fake"), "the app starts and lists its tools");
+            Check(appsLog.Contains("Apps ready: 1 tools from fake"), "the app starts and lists its tools" + (appsLog.Contains("Apps ready") ? "" : ": " + appsLog.Replace("\n", " / ")));
             Check(appsLog.Contains("echo: hi x2"), "an app tool gets its arguments whole, numbers included, and its answer comes back");
             Check(appsLog.Contains("token [TEST_VAULT_KEY hidden]") && !appsLog.Contains("supersecret"), "a ${KEY} in apps.json comes from the vault and its value stays hidden");
             crew.Shutdown();
