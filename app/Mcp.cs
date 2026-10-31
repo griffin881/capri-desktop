@@ -225,7 +225,7 @@ namespace CapriDesktop
         private readonly StringBuilder errors = new StringBuilder();
         private Process process;
         private StreamWriter input;
-        private int nextId;
+        private int nextId, heard;
         private string session;
         internal List<AppTool> Tools;
         internal string Problem;
@@ -344,11 +344,14 @@ namespace CapriDesktop
         private void Launch()
         {
             if (string.IsNullOrWhiteSpace(command)) throw new InvalidOperationException("it has no command or url in apps.json.");
-            StringBuilder line = new StringBuilder(Arg(Filled(command)));
-            foreach (string arg in args) line.Append(' ').Append(Arg(Filled(arg)));
-            // Through cmd, so npx, uvx and other .cmd launchers start like they do in a terminal (through sh off Windows).
+            string program = Filled(command);
+            StringBuilder rest = new StringBuilder();
+            foreach (string arg in args) rest.Append(' ').Append(Arg(Filled(arg)));
+            string line = Arg(program) + rest;
+            // A program starts by itself; anything else goes through cmd, so npx, uvx and other .cmd launchers start like they do in a terminal (through sh off Windows).
             bool windows = System.IO.Path.DirectorySeparatorChar == '\\';
-            ProcessStartInfo start = windows ? new ProcessStartInfo("cmd.exe", "/d /s /c \"" + line + "\"") : new ProcessStartInfo("/bin/sh", "-c '" + line.ToString().Replace("'", "'\\''") + "'");
+            ProcessStartInfo start = windows && program.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? new ProcessStartInfo(program, rest.ToString().TrimStart())
+                : windows ? new ProcessStartInfo("cmd.exe", "/d /s /c \"" + line + "\"") : new ProcessStartInfo("/bin/sh", "-c '" + line.Replace("'", "'\\''") + "'");
             start.UseShellExecute = false;
             start.CreateNoWindow = true;
             start.RedirectStandardInput = true;
@@ -386,6 +389,7 @@ namespace CapriDesktop
                 while ((text = from.StandardOutput.ReadLine()) != null)
                 {
                     text = text.Trim();
+                    Interlocked.Increment(ref heard);
                     if (text.Length == 0 || text[0] != '{') continue;
                     Dictionary<string, object> message;
                     try { message = AppJson.Object(text); } catch (FormatException) { continue; }
@@ -451,7 +455,7 @@ namespace CapriDesktop
                 AppReply pending = new AppReply();
                 lock (gate) waiting[id] = pending;
                 Send(message);
-                if (!pending.Done.WaitOne(wait)) { lock (gate) waiting.Remove(id); throw new TimeoutException(method + " took longer than " + wait / 1000 + " seconds"); }
+                if (!pending.Done.WaitOne(wait)) { lock (gate) waiting.Remove(id); throw new TimeoutException(method + " took longer than " + wait / 1000 + " seconds (it printed " + heard + " lines)"); }
                 reply = pending.Message;
                 if (reply == null) throw new IOException(Problem ?? "it stopped answering");
             }

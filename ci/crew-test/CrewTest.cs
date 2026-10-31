@@ -22,8 +22,10 @@ namespace CapriDesktop
         static int FakeServer()
         {
             string line;
+            Console.Error.WriteLine("fake: started");
             while ((line = Console.In.ReadLine()) != null)
             {
+                Console.Error.WriteLine("fake: got " + line.Length + " chars");
                 Dictionary<string, object> m;
                 try { m = AppJson.Object(line); } catch (FormatException) { continue; }
                 object id;
@@ -111,8 +113,8 @@ namespace CapriDesktop
             Check(keyedSeen.Contains("$env:TEST_VAULT_KEY"), "the worker is told the key's name");
             // The app plug: a stand-in MCP server (PowerShell speaking JSON-RPC over stdin and stdout) is listed in apps.json,
             // started by an apps job, asked for its tools, and called with arguments that aren't plain strings; a ${KEY} in its settings comes from the vault and stays hidden.
-            File.WriteAllText(Path.Combine(data, "apps.json"), "{\"mcpServers\":{\"fake\":{\"command\":" + Voice.Quote(System.Reflection.Assembly.GetExecutingAssembly().Location) + ",\"args\":[\"--fake-mcp\"],\"env\":{\"FAKE_TOKEN\":\"${TEST_VAULT_KEY}\"}},\"off\":{\"command\":\"nothing\",\"disabled\":true}}}");
-            Check(crew.Apps.Names.Count == 1 && crew.Apps.Names[0] == "fake", "apps.json lists the app and skips a disabled one");
+            File.WriteAllText(Path.Combine(data, "apps.json"), "{\"mcpServers\":{\"fake\":{\"command\":" + Voice.Quote(System.Reflection.Assembly.GetExecutingAssembly().Location) + ",\"args\":[\"--fake-mcp\"],\"env\":{\"FAKE_TOKEN\":\"${TEST_VAULT_KEY}\"}},\"viacmd\":{\"command\":\"cmd\",\"args\":[\"/c\"," + Voice.Quote(System.Reflection.Assembly.GetExecutingAssembly().Location) + ",\"--fake-mcp\"]},\"off\":{\"command\":\"nothing\",\"disabled\":true}}}");
+            Check(crew.Apps.Names.Count == 2 && crew.Apps.Names[0] == "fake", "apps.json lists the apps and skips a disabled one");
             Brain appsBrain = new Brain();
             appsBrain.Consults.Enqueue("{\"title\":\"App test\",\"worker\":\"apps\",\"plan\":\"Using the fake app.\"}");
             appsBrain.Consults.Enqueue("{\"verdict\":\"pass\",\"notes\":\"\",\"report\":\"Apps work.\"}");
@@ -124,7 +126,7 @@ namespace CapriDesktop
             string appsLog = string.Join("\n", crew.LogLines(appsGig));
             foreach (string line in crew.LogLines(appsGig)) Console.WriteLine("  | " + line);
             Check(appsGig.Worker == "apps" && appsGig.Status == "done", "an apps job runs on the apps worker (" + appsGig.Worker + ", " + appsGig.Status + ")");
-            Check(appsLog.Contains("Apps ready: 1 tools from fake"), "the app starts and lists its tools" + (appsLog.Contains("Apps ready") ? "" : ": " + appsLog.Replace("\n", " / ")));
+            Check(appsLog.Contains("Apps ready: 2 tools from fake, viacmd"), "both apps start, by themselves and through cmd, and list their tools: " + appsLog.Replace("\n", " / "));
             Check(appsLog.Contains("echo: hi x2"), "an app tool gets its arguments whole, numbers included, and its answer comes back");
             Check(appsLog.Contains("token [TEST_VAULT_KEY hidden]") && !appsLog.Contains("supersecret"), "a ${KEY} in apps.json comes from the vault and its value stays hidden");
             crew.Shutdown();
