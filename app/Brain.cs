@@ -238,10 +238,10 @@ namespace CapriDesktop
         // Free and cheap brains whose keys say who they are, so a bare key is enough: the server it belongs to, and its name.
         internal static string Known(string key, out string name)
         {
-            key = (key ?? "").Trim();
+            key = (key ?? "").Trim().Trim('"', '\'', '`');
             name = null;
             if (key.StartsWith("csk-", StringComparison.Ordinal)) { name = "Cerebras"; return "https://api.cerebras.ai/v1"; }
-            if (key.StartsWith("AIza", StringComparison.Ordinal)) { name = "Gemini"; return "https://generativelanguage.googleapis.com/v1beta/openai"; }
+            if (key.StartsWith("AIza", StringComparison.Ordinal) || key.StartsWith("AQ.", StringComparison.Ordinal)) { name = "Gemini"; return "https://generativelanguage.googleapis.com/v1beta/openai"; }
             if (key.StartsWith("gsk_", StringComparison.Ordinal)) { name = "Groq"; return "https://api.groq.com/openai/v1"; }
             if (key.StartsWith("sk-or-", StringComparison.Ordinal)) { name = "OpenRouter"; return "https://openrouter.ai/api/v1"; }
             return null;
@@ -830,6 +830,8 @@ namespace CapriDesktop
 
         private static void Sign(HttpWebRequest request, string key, bool claude)
         {
+            // Google takes its keys in its own header: its newer AQ. keys are turned away as Bearer tokens.
+            if (!claude && Cloud.IsAddress(key) && Cloud.HostOf(key).EndsWith("googleapis.com", StringComparison.OrdinalIgnoreCase)) { request.Headers["x-goog-api-key"] = Cloud.TokenOf(key); return; }
             if (!claude) { request.Headers["Authorization"] = "Bearer " + Cloud.TokenOf(key); return; }
             request.Headers["x-api-key"] = key;
             request.Headers["anthropic-version"] = "2026-10-21";

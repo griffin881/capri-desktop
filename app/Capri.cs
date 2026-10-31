@@ -4077,6 +4077,7 @@ namespace CapriDesktop
         private string SaveJobKey(string text)
         {
             string[] parts = (text ?? "").Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++) parts[i] = parts[i].Trim('"', '\'', '`', ',', ';');
             if (parts.Length == 0) return "Paste a key first.";
             // NAME=key works too; a key that only ends in = (some do) stays whole.
             if (parts.Length == 1) { Match pair = Regex.Match(parts[0], @"^([A-Za-z_][A-Za-z0-9_]{1,63})=(.+)$"); if (pair.Success) parts = new[] { pair.Groups[1].Value, pair.Groups[2].Value }; }
@@ -11457,7 +11458,7 @@ namespace CapriDesktop
                             if (MouthCell(clock.Elapsed.TotalSeconds, idle) < 0) throw new Exception("Her mouth did not follow the agent's audio.");
                             // Free job brains: a bare key finds its server, links keep their own version path, and each key gets its best free model.
                             string knownName;
-                            if (Cloud.Known("csk-abc123", out knownName) != "https://api.cerebras.ai/v1" || knownName != "Cerebras" || Cloud.Known("AIzaSyX", out knownName) == null || knownName != "Gemini" || Cloud.Known("sk-proj-1", out knownName) != null) throw new Exception("Free brain keys aren't recognised.");
+                            if (Cloud.Known("csk-abc123", out knownName) != "https://api.cerebras.ai/v1" || knownName != "Cerebras" || Cloud.Known("AIzaSyX", out knownName) == null || knownName != "Gemini" || Cloud.Known("AQ.Ab8RN6x", out knownName) == null || knownName != "Gemini" || Cloud.Known("sk-proj-1", out knownName) != null) throw new Exception("Free brain keys aren't recognised.");
                             if (Cloud.ApiOf("https://generativelanguage.googleapis.com/v1beta/openai AIza") != "https://generativelanguage.googleapis.com/v1beta/openai" || Cloud.ApiOf("https://api.cerebras.ai/v1 csk") != "https://api.cerebras.ai/v1" || Cloud.ApiOf("https://api.groq.com/openai/v1/ g") != "https://api.groq.com/openai/v1" || Cloud.ApiOf("https://abc.trycloudflare.com x") != "https://abc.trycloudflare.com/v1" || Cloud.ApiOf("http://127.0.0.1:8080/v1/chat/completions") != "http://127.0.0.1:8080/v1") throw new Exception("Server links go to the wrong place: " + Cloud.ApiOf("https://generativelanguage.googleapis.com/v1beta/openai AIza"));
                             if (Brain.JobModel("https://api.cerebras.ai/v1 csk", new System.Collections.Generic.List<string> { "llama3.1-8b", "qwen-3.8-27b", "gpt-oss-120b" }) != "gpt-oss-120b"
                                 || Brain.JobModel("https://generativelanguage.googleapis.com/v1beta/openai AIza", new System.Collections.Generic.List<string> { "models/gemini-3.8-flash-lite", "models/gemini-3.6-flash", "models/gemini-3.8-flash-tts", "models/gemini-3.8-flash", "models/gemma-4-31b-it" }) != "gemini-3.8-flash"
