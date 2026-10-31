@@ -172,6 +172,25 @@ namespace CapriDesktop
             stream.Flush();
         }
 
+        // Free tiers cap requests per minute, so OpenCode's requests to each one are spaced out.
+        private static readonly Dictionary<string, DateTime> nextSlot = new Dictionary<string, DateTime>();
+        private static void Pace(string api)
+        {
+            Uri uri;
+            string host = Uri.TryCreate(api, UriKind.Absolute, out uri) ? uri.Host.ToLowerInvariant() : "";
+            int gap = host.EndsWith("cerebras.ai") || host.EndsWith("groq.com") ? 2200 : host.EndsWith("googleapis.com") ? 6500 : host.EndsWith("openrouter.ai") ? 3200 : host.EndsWith("nvidia.com") ? 1600 : 0;
+            if (gap == 0) return;
+            TimeSpan wait;
+            lock (nextSlot)
+            {
+                DateTime now = DateTime.UtcNow, next;
+                if (!nextSlot.TryGetValue(host, out next) || next < now) next = now;
+                wait = next - now;
+                nextSlot[host] = next.AddMilliseconds(gap);
+            }
+            if (wait > TimeSpan.Zero) Thread.Sleep(wait > TimeSpan.FromSeconds(20) ? TimeSpan.FromSeconds(20) : wait);
+        }
+
         private bool Cold(RelayBrain brain)
         {
             lock (resting) { DateTime until; return resting.TryGetValue(brain.Name + "|" + brain.Model, out until) && until > DateTime.UtcNow; }
@@ -198,6 +217,7 @@ namespace CapriDesktop
                 // Fields these servers trip over: the newer token limit name and stream options some don't take.
                 object limit;
                 if (asked.TryGetValue("max_completion_tokens", out limit) && !asked.ContainsKey("max_tokens")) { asked["max_tokens"] = limit; asked.Remove("max_completion_tokens"); }
+                Pace(brain.Api);
                 HttpWebRequest outgoing = (HttpWebRequest)WebRequest.Create(brain.Api + "/chat/completions");
                 ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
                 outgoing.Method = "POST";

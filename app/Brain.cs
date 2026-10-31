@@ -346,7 +346,38 @@ namespace CapriDesktop
             lock (resting) { DateTime until; return resting.TryGetValue(cloud.Id, out until) && until > DateTime.UtcNow; }
         }
         internal static void Chill(Cloud cloud, double minutes) { if (cloud != null) lock (resting) resting[cloud.Id] = DateTime.UtcNow.AddMinutes(minutes); }
-        internal static void Thaw() { lock (resting) resting.Clear(); }
+        internal static void Thaw() { lock (resting) resting.Clear(); lock (slow) slow.Clear(); }
+
+        // A brain that timed out lately goes to the back of the line for an hour, so she doesn't sit waiting on it again.
+        private static readonly Dictionary<string, DateTime> slow = new Dictionary<string, DateTime>();
+        internal static bool Slow(Cloud cloud)
+        {
+            if (cloud == null) return false;
+            lock (slow) { DateTime until; return slow.TryGetValue(cloud.Id, out until) && until > DateTime.UtcNow; }
+        }
+        internal static void MarkSlow(Cloud cloud) { if (cloud != null) lock (slow) slow[cloud.Id] = DateTime.UtcNow.AddMinutes(60); }
+
+        // Free tiers cap requests per minute, so requests to each one are spaced out instead of tripping the limit.
+        private static readonly Dictionary<string, DateTime> nextSlot = new Dictionary<string, DateTime>();
+        internal static int GapFor(string host)
+        {
+            host = (host ?? "").ToLowerInvariant();
+            return host.EndsWith("cerebras.ai") || host.EndsWith("groq.com") ? 2200 : host.EndsWith("googleapis.com") ? 6500 : host.EndsWith("openrouter.ai") ? 3200 : host.EndsWith("nvidia.com") ? 1600 : 0;
+        }
+        internal static void Pace(string host)
+        {
+            int gap = GapFor(host);
+            if (gap == 0) return;
+            TimeSpan wait;
+            lock (nextSlot)
+            {
+                DateTime now = DateTime.UtcNow, next;
+                if (!nextSlot.TryGetValue(host, out next) || next < now) next = now;
+                wait = next - now;
+                nextSlot[host] = next.AddMilliseconds(gap);
+            }
+            if (wait > TimeSpan.Zero) System.Threading.Thread.Sleep(wait > TimeSpan.FromSeconds(20) ? TimeSpan.FromSeconds(20) : wait);
+        }
         // Resting means her brain went quiet and nothing that can see is standing in for it, so screen looks wait.
         internal bool Resting { get { Cloud remote = Remote; return Cold(remote) && Another(remote, true) == null; } }
         internal Cloud Another(Cloud than, bool eyes = false)
@@ -354,8 +385,9 @@ namespace CapriDesktop
             Func<List<Cloud>> spares = Spares;
             List<Cloud> all = spares == null ? null : spares();
             if (all == null) return null;
-            foreach (Cloud other in all)
-                if (other != null && other.Model != null && (than == null || other.Id != than.Id) && !Cold(other) && (!eyes || Sighted(other.Model))) return other;
+            for (int pass = 0; pass < 2; pass++)
+                foreach (Cloud other in all)
+                    if (other != null && other.Model != null && (than == null || other.Id != than.Id) && !Cold(other) && (pass == 1 || !Slow(other)) && (!eyes || Sighted(other.Model))) return other;
             return null;
         }
         // Models that take pictures, so a screen look can fall back to them.
@@ -1117,7 +1149,7 @@ namespace CapriDesktop
         {
             Check(ticket);
             Cloud remote = Remote;
-            if (Cold(remote)) { Cloud next = Another(remote, parts != null); if (next != null) remote = next; }
+            if (Cold(remote) || Slow(remote)) { Cloud next = Another(remote, parts != null); if (next != null && (Cold(remote) || !Slow(next))) remote = next; }
             // A look at the screen goes to a brain with eyes when hers has none and one is standing by.
             else if (parts != null && remote != null && !Sighted(remote.Model)) { Cloud eyes = Another(remote, true); if (eyes != null) remote = eyes; }
             string listed = tools ? openAiTools ?? Hands.Tools : null;
@@ -1139,11 +1171,18 @@ namespace CapriDesktop
                 };
                 string address = Address(remote.Kind, "/chat/completions", remote.Key);
                 Action<HttpWebRequest> sign = delegate(HttpWebRequest request) { Sign(request, remote.Key, false); };
-                try { return Read(Send<CompletionReply>(address, body, CloudWait, listed, sign, parts, ticket), calls); }
+                // With another brain standing by, a slow one gets less time before it hands over.
+                int wait = Another(remote, parts != null) != null ? Math.Min(CloudWait, CloudWait >= 120000 ? 60000 : 25000) : CloudWait;
+                string host = new Uri(address).Host;
+                bool waited = false;
+            again:
+                Pace(host);
+                try { return Read(Send<CompletionReply>(address, body, wait, listed, sign, parts, ticket), calls); }
                 catch (WebException error)
                 {
-                    // A brain that stops answering rests for a few minutes while the next one takes over.
+                    // A brain that stops answering rests for a few minutes while the next one takes over, and stays at the back of the line for an hour.
                     if (error.Status == WebExceptionStatus.RequestCanceled) throw;
+                    MarkSlow(remote);
                     Cloud next = Another(remote, parts != null);
                     if (next == null) throw;
                     Chill(remote, 4);
@@ -1153,6 +1192,8 @@ namespace CapriDesktop
                 catch (BrainException error)
                 {
                     // A busy, failing or missing model hands off too: a free key that hit its limit rests a minute.
+                    // A free tier's per-minute limit clears in seconds, so the same fast brain gets one more try first.
+                    if (error.Message == Busy && !waited) { waited = true; Log(address, -1, remote.Model + " is at its per-minute limit, trying again in a few seconds"); System.Threading.Thread.Sleep(6000); goto again; }
                     if (error.Message == Busy || error.Message == Down || error.Message == Gone)
                     {
                         Cloud next = Another(remote, parts != null);
