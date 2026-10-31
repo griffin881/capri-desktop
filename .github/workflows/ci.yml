@@ -42,6 +42,7 @@ jobs:
         shell: pwsh
         run: |
           $failed = $false
+          npm install -g opencode-ai@1.19.5 --no-audit --no-fund --loglevel=error *>&1 | Out-Null
           try { ./ci/crew-test.ps1 *>&1 | Tee-Object -FilePath crew.log } catch { $failed = $true; $_ | Out-String | Add-Content crew.log }
           if ($failed) {
             Get-Content crew.log | Where-Object { $_ -match 'FAIL|error|Exception|failed' } | Select-Object -First 30 | ForEach-Object { Write-Host ('::error::' + ($_ -replace '[\r\n%]', ' ')) }

@@ -224,6 +224,9 @@ namespace CapriDesktop
         [DataMember] public string OpenCodeModel;
         // Keys for her jobs, saved on the jobs board: brains her crew thinks with (Link and Model), and named keys her workers use (Name and Key).
         [DataMember] public List<JobKey> JobKeys;
+        // A brain from the jobs board she talks with instead of her tier's, picked in the Mainframe's brain menu, and its model.
+        [DataMember] public string ChatBrain;
+        [DataMember] public string ChatModel;
 
         [OnDeserializing]
         private void Defaults(StreamingContext context)
@@ -908,6 +911,10 @@ namespace CapriDesktop
             crew.OpenCodeModel = delegate { return preferences.OpenCodeModel; };
             crew.JobCodeModel = JobCodeModel;
             crew.Keys = VaultKeys;
+            crew.CodeHire = HireCoder;
+            crew.HasCodeBrains = HasCodeBrains;
+            crew.Relay.Brains = RelayBrains;
+            crew.Relay.Log = delegate(string line) { Brain.Log("coding brains", -1, line); };
             crew.Context = delegate { string said = callHeard; return Journal.Recent(14) + (chatting && !string.IsNullOrEmpty(said) ? "\n" + DateTime.Now.ToString("HH:mm") + " them (on the call, just now): " + said : ""); };
             if (!testing) { Hands.LookUp = Crew.LookUp; Hands.Answers = true; }
             Hands.Crew = delegate(string tool, ToolArguments args)
@@ -3660,6 +3667,7 @@ namespace CapriDesktop
             {
                 string[] installed = null;
                 try { installed = Brain.InstalledModels(); } catch (WebException) { } catch (IOException) { } catch (SerializationException) { }
+                if (installed != null) ollamaModels = installed;
                 Machine found = Machine.Read();
                 Pick local = engine.Installed();
                 Post(delegate { finding = false; UseBrain(installed, found, local); });
@@ -4009,9 +4017,194 @@ namespace CapriDesktop
         private List<Cloud> SpareClouds()
         {
             List<Cloud> all = JobClouds();
+            if (ChatKey() != null)
+            {
+                string key = Voice.Unprotect(preferences.Tier == 1 ? preferences.NvidiaKey : preferences.Tier == 2 ? preferences.PaidKey : null);
+                if (key != null) all.Add(new Cloud(key, preferences.Tier == 1 ? preferences.NvidiaModel : preferences.PaidModel));
+            }
             Cloud other = SpareCloud();
             if (other != null) all.Add(other);
             return all;
+        }
+
+        // ---- her coding brains -----------------------------------------------------------------------------
+
+        // Model lists per key, fetched in the background so menus and coding jobs never wait on them.
+        private static readonly Dictionary<string, List<string>> keyModels = new Dictionary<string, List<string>>();
+
+        private static List<string> ModelsOf(string key, bool wait)
+        {
+            lock (keyModels) { List<string> known; if (keyModels.TryGetValue(key, out known)) return known; }
+            if (!wait) { ThreadPool.QueueUserWorkItem(delegate { ModelsOf(key, true); }); return null; }
+            List<string> found = null;
+            try { found = Brain.CloudModels(key); } catch (Exception) { found = null; }
+            if (found != null) lock (keyModels) keyModels[key] = found;
+            return found;
+        }
+
+        // Every coding brain she has, best first: NVIDIA's strongest open coder (free), the free job brains, then her MAX key on its cheapest model.
+        private List<Cloud> CodeClouds(bool wait)
+        {
+            List<Cloud> all = new List<Cloud>();
+            string nvidia = Voice.Unprotect(preferences.NvidiaKey);
+            if (nvidia != null) { string coder = Brain.CodeModel(ModelsOf(nvidia, wait)); if (coder != null) all.Add(new Cloud(nvidia, coder)); }
+            List<JobKey> keys = preferences.JobKeys;
+            List<Cloud> later = new List<Cloud>();
+            if (keys != null)
+                foreach (JobKey key in keys)
+                {
+                    if (key == null || key.Link == null) continue;
+                    string link = Voice.Unprotect(key.Link);
+                    if (string.IsNullOrEmpty(link) || Cloud.KindOf(link) == null || Cloud.KindOf(link) == "anthropic") continue;
+                    string model = Brain.CodeModel(ModelsOf(link, wait)) ?? key.Model;
+                    // Gemini turns down more security work, so it waits behind the open models.
+                    if (key.Name == "Gemini") later.Add(new Cloud(link, model)); else all.Add(new Cloud(link, model));
+                }
+            all.AddRange(later);
+            string paid = Voice.Unprotect(preferences.PaidKey);
+            if (paid != null && Cloud.KindOf(paid) != "anthropic")
+            {
+                List<string> paidModels = ModelsOf(paid, wait);
+                string cheap = null;
+                if (paidModels != null) foreach (string id in paidModels) if (Regex.IsMatch(id, "flash|mini|lite|small", RegexOptions.IgnoreCase)) { cheap = id; break; }
+                all.Add(new Cloud(paid, cheap ?? preferences.PaidModel));
+            }
+            all.RemoveAll(c => c.Model == null);
+            return all;
+        }
+
+        private List<RelayBrain> RelayBrains()
+        {
+            List<RelayBrain> brains = new List<RelayBrain>();
+            foreach (Cloud cloud in CodeClouds(true))
+            {
+                string api = cloud.Kind == "custom" ? Cloud.ApiOf(cloud.Key) : cloud.Kind == "nvidia" ? Brain.Nvidia + "/v1" : cloud.Kind == "deepseek" ? Brain.DeepSeek + "/v1" : Brain.OpenAi + "/v1";
+                brains.Add(new RelayBrain { Name = cloud.Kind == "custom" ? cloud.Company : cloud.Name, Api = api, Token = Cloud.TokenOf(cloud.Key), Model = cloud.Model, Google = Cloud.IsAddress(cloud.Key) && Cloud.HostOf(cloud.Key).EndsWith("googleapis.com", StringComparison.OrdinalIgnoreCase) });
+            }
+            return brains;
+        }
+
+        // The brain that plans, briefs and reviews coding jobs: the first coding brain, with the rest standing by.
+        private Brain HireCoder()
+        {
+            List<Cloud> code = CodeClouds(true);
+            if (code.Count == 0) return null;
+            Brain coder = new Brain();
+            coder.Remote = code[0];
+            coder.Model = code[0].Model;
+            coder.CloudWait = 120000;
+            List<Cloud> rest = code.GetRange(1, code.Count - 1);
+            coder.Spares = delegate { return rest; };
+            return coder;
+        }
+
+        private bool HasCodeBrains()
+        {
+            if (Voice.Unprotect(preferences.NvidiaKey) != null || Voice.Unprotect(preferences.PaidKey) != null) return true;
+            List<JobKey> keys = preferences.JobKeys;
+            return keys != null && keys.Exists(k => k != null && k.Link != null);
+        }
+
+        // ---- the brain menu --------------------------------------------------------------------------------
+
+        // Every other brain she can talk with, for the Mainframe's brain menu: a title, then the models to switch to.
+        internal List<KeyValuePair<string, List<KeyValuePair<string, Action>>>> OtherBrains()
+        {
+            List<KeyValuePair<string, List<KeyValuePair<string, Action>>>> all = new List<KeyValuePair<string, List<KeyValuePair<string, Action>>>>();
+            Cloud now = brain.Remote;
+            string nvidia = Voice.Unprotect(preferences.NvidiaKey);
+            if (nvidia != null && !(now != null && now.Kind == "nvidia"))
+                all.Add(Group("NVIDIA · free", ModelsOf(nvidia, false), preferences.NvidiaModel, delegate(string model) { SwitchBrain(1, null, model); }));
+            List<JobKey> keys = preferences.JobKeys;
+            if (keys != null)
+                foreach (JobKey key in keys)
+                {
+                    if (key == null || key.Link == null) continue;
+                    string link = Voice.Unprotect(key.Link);
+                    if (string.IsNullOrEmpty(link) || (now != null && now.Key == link)) continue;
+                    string name = key.Name;
+                    string note = name == "Cerebras" ? " · free, fastest" : name == "Gemini" ? " · free, sees your screen" : name == "Groq" || name == "OpenRouter" ? " · free" : "";
+                    all.Add(Group(name + note, ModelsOf(link, false), key.Model, delegate(string model) { SwitchBrain(-1, name, model); }));
+                }
+            string paid = Voice.Unprotect(preferences.PaidKey);
+            if (paid != null && !(now != null && now.Key == paid))
+            {
+                Cloud probe = new Cloud(paid, preferences.PaidModel);
+                all.Add(Group((probe.Kind == "custom" ? probe.Company : probe.Name) + " · your MAX key", ModelsOf(paid, false), preferences.PaidModel, delegate(string model) { SwitchBrain(2, null, model); }));
+            }
+            List<KeyValuePair<string, Action>> local = new List<KeyValuePair<string, Action>>();
+            string[] installed = ollamaModels;
+            if (installed == null) ThreadPool.QueueUserWorkItem(delegate { try { ollamaModels = Brain.InstalledModels(); } catch (Exception) { } });
+            if (installed != null)
+                foreach (string model in installed)
+                {
+                    string pick = model;
+                    if (!(now == null && brain.Model == model)) local.Add(new KeyValuePair<string, Action>(model + (Regex.IsMatch(model, "^lfm3") ? "  (private)" : ""), delegate { SwitchBrain(0, null, pick); }));
+                }
+            if (installed != null && !Array.Exists(installed, m => Regex.IsMatch(m, "^lfm3")))
+                local.Add(new KeyValuePair<string, Action>("Get LFM3: private and offline, 1.7 GB", delegate { GetLfm3(); }));
+            if (local.Count > 0) all.Add(new KeyValuePair<string, List<KeyValuePair<string, Action>>>("On this PC · private", local));
+            return all;
+        }
+
+        private static KeyValuePair<string, List<KeyValuePair<string, Action>>> Group(string title, List<string> models, string saved, Action<string> pick)
+        {
+            List<string> shown = Brain.TopModels(models, saved, 12);
+            List<KeyValuePair<string, Action>> items = new List<KeyValuePair<string, Action>>();
+            foreach (string model in shown) { string m = model; items.Add(new KeyValuePair<string, Action>(m, delegate { pick(m); })); }
+            return new KeyValuePair<string, List<KeyValuePair<string, Action>>>(title, items);
+        }
+
+        // One click in the brain menu: tier 0, 1 or 2 with a model, or a brain from the jobs board by name.
+        internal void SwitchBrain(int tier, string named, string model)
+        {
+            brain.Cancel();
+            ++asking;
+            CloseTalk();
+            if (named != null) { preferences.ChatBrain = named; preferences.ChatModel = model; }
+            else
+            {
+                preferences.ChatBrain = null;
+                preferences.ChatModel = null;
+                preferences.Tier = tier;
+                if (tier == 1) preferences.NvidiaModel = model;
+                else if (tier == 2) preferences.PaidModel = model;
+                else preferences.Model = model;
+                Mirror();
+            }
+            SavePreferences();
+            brain.Remote = TierCloud();
+            brain.Forget();
+            cloudModels = null;
+            ShowTiers();
+            FindBrain();
+        }
+
+        private string[] ollamaModels;
+        private volatile bool pullingLfm3;
+
+        // LFM3 through Ollama: pulled once, then she talks with it on this PC.
+        private void GetLfm3()
+        {
+            if (pullingLfm3) return;
+            pullingLfm3 = true;
+            mainframe.ShowProblem("Getting LFM3 (1.7 GB)...");
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string problem = null;
+                try
+                {
+                    Brain.Pull("lfm3", delegate(string status, long done, long total) { if (total > 0) Post(delegate { mainframe.ShowProblem("Getting LFM3: " + (done * 100 / total) + "%"); }); }, delegate { return false; });
+                }
+                catch (Exception error) { problem = Brain.Brief(error.Message) ?? error.Message; }
+                Post(delegate
+                {
+                    pullingLfm3 = false;
+                    if (problem != null) { mainframe.ShowProblem("Couldn't get LFM3: " + (problem.Length > 50 ? problem.Substring(0, 47) + "..." : problem) + " Is Ollama open?"); return; }
+                    ollamaModels = null;
+                    SwitchBrain(0, null, "lfm3:latest");
+                });
+            });
         }
 
         // The brains saved on the jobs board, in order.
@@ -4141,6 +4334,8 @@ namespace CapriDesktop
 
         private Cloud TierCloud()
         {
+            JobKey picked = ChatKey();
+            if (picked != null) { string link = Voice.Unprotect(picked.Link); if (!string.IsNullOrEmpty(link)) return new Cloud(link, preferences.ChatModel ?? picked.Model); }
             string key = Voice.Unprotect(preferences.Tier == 1 ? preferences.NvidiaKey : preferences.Tier == 2 ? preferences.PaidKey : null);
             return key == null ? null : new Cloud(key, preferences.Tier == 1 ? preferences.NvidiaModel : preferences.PaidModel);
         }
@@ -4157,8 +4352,19 @@ namespace CapriDesktop
             mainframe.ShowTiers(preferences.Tier, nvidia == null ? null : Voice.Tail(nvidia), paid == null ? null : Voice.Tail(paid));
         }
 
+        private JobKey ChatKey()
+        {
+            string name = preferences.ChatBrain;
+            List<JobKey> keys = preferences.JobKeys;
+            if (name == null || keys == null) return null;
+            foreach (JobKey key in keys) if (key != null && key.Link != null && key.Name == name) return key;
+            return null;
+        }
+
         private void Keep(Cloud remote)
         {
+            JobKey picked = ChatKey();
+            if (picked != null && remote.Kind == "custom" && Voice.Unprotect(picked.Link) == remote.Key) { preferences.ChatModel = remote.Model; SavePreferences(); return; }
             if (remote.Kind == "nvidia") preferences.NvidiaModel = remote.Model;
             else preferences.PaidModel = remote.Model;
             Mirror();
@@ -4167,7 +4373,9 @@ namespace CapriDesktop
 
         internal void ChooseTier(int tier)
         {
-            if (tier == preferences.Tier) return;
+            if (tier == preferences.Tier && preferences.ChatBrain == null) return;
+            preferences.ChatBrain = null;
+            preferences.ChatModel = null;
             brain.Cancel();
             ++asking;
             CloseTalk();

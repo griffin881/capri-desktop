@@ -246,8 +246,16 @@ namespace CapriDesktop
             if (key.StartsWith("sk-or-", StringComparison.Ordinal)) { name = "OpenRouter"; return "https://openrouter.ai/api/v1"; }
             return null;
         }
-        internal string Name { get { return Kind == "anthropic" ? "Claude" : Kind == "deepseek" ? "DeepSeek" : Kind == "nvidia" ? "NVIDIA" : Kind == "custom" ? "Your server" : "ChatGPT"; } }
-        internal string Company { get { return Kind == "anthropic" ? "Anthropic" : Kind == "deepseek" ? "DeepSeek" : Kind == "nvidia" ? "NVIDIA" : Kind == "custom" ? HostOf(Key) : "OpenAI"; } }
+        internal string Name { get { return Kind == "anthropic" ? "Claude" : Kind == "deepseek" ? "DeepSeek" : Kind == "nvidia" ? "NVIDIA" : Kind == "custom" ? Provider(Key) ?? "Your server" : "ChatGPT"; } }
+        internal string Company { get { return Kind == "anthropic" ? "Anthropic" : Kind == "deepseek" ? "DeepSeek" : Kind == "nvidia" ? "NVIDIA" : Kind == "custom" ? Provider(Key) ?? HostOf(Key) : "OpenAI"; } }
+
+        // The name a known server goes by, so the Mainframe says Cerebras rather than api.cerebras.ai.
+        internal static string Provider(string key)
+        {
+            if (!IsAddress(key)) return null;
+            string host = HostOf(key).ToLowerInvariant();
+            return host.EndsWith("cerebras.ai") ? "Cerebras" : host.EndsWith("googleapis.com") ? "Gemini" : host.EndsWith("groq.com") ? "Groq" : host.EndsWith("openrouter.ai") ? "OpenRouter" : host.EndsWith("uplinkswitch.com") ? "Uplink" : host.EndsWith("deepseek.com") ? "DeepSeek" : host.Contains("trycloudflare.com") || host.Contains("ngrok") ? "Your Kaggle server" : null;
+        }
 
         // Your own server: an address like http://127.0.0.1:8080/v1 or a tunnel link, optionally followed by a space and its key.
         // Anything that talks the OpenAI chat format works: llama.cpp's server, LM Studio, Ollama's /v1, vLLM, the Kaggle DeepSeek link.
@@ -791,6 +799,35 @@ namespace CapriDesktop
             return null;
         }
 
+        // The strongest open coding model on a key, for her coding crew: big open coders that don't turn security work down, newest first.
+        private static readonly string[] Coders = { @"glm-5", @"deepseek-v4\.\d-(pro|flash)|deepseek-v4-(pro|flash)", @"kimi-k[23]", @"qwen3(\.\d+)?-coder-480b", @"qwen3(\.\d+)?-coder", @"zai-glm", @"devstral", @"deepseek-v3", @"qwen-?3(\.\d+)?-(397|235)b", @"gpt-oss-120b", @"qwen-?3(\.\d+)?-\d+b", @"llama-4-maverick" };
+
+        internal static string CodeModel(List<string> models)
+        {
+            if (models == null) return null;
+            foreach (string want in Coders)
+            {
+                List<string> found = models.FindAll(id => Regex.IsMatch(id, want, RegexOptions.IgnoreCase) && !Regex.IsMatch(id, @"base|embed|reward|guard|safety|vl\b|-vl-|vision|instruct-fp8-dynamic", RegexOptions.IgnoreCase));
+                if (found.Count == 0) continue;
+                found.Sort(delegate(string a, string b) { return string.CompareOrdinal(b, a); });
+                return found[0];
+            }
+            return null;
+        }
+
+        // A short menu of a key's models: the saved one first, then the best-known chat and coding models, then the rest.
+        internal static List<string> TopModels(List<string> models, string saved, int count)
+        {
+            List<string> shown = new List<string>();
+            if (saved != null) shown.Add(saved);
+            if (models == null) return shown;
+            foreach (string want in Coders)
+                foreach (string id in models)
+                    if (shown.Count < count && !shown.Contains(id) && Regex.IsMatch(id, want, RegexOptions.IgnoreCase) && !Regex.IsMatch(id, @"base|embed|reward|guard|safety", RegexOptions.IgnoreCase)) shown.Add(id);
+            foreach (string id in models) if (shown.Count < count && !shown.Contains(id) && !Regex.IsMatch(id, @"embed|reward|guard|safety|tts|image|audio|whisper|rerank", RegexOptions.IgnoreCase)) shown.Add(id);
+            return shown;
+        }
+
         // The model a job brain uses on its key: the strongest free one each provider has, else the first.
         internal static string JobModel(string key, List<string> models)
         {
@@ -1081,6 +1118,8 @@ namespace CapriDesktop
             Check(ticket);
             Cloud remote = Remote;
             if (Cold(remote)) { Cloud next = Another(remote, parts != null); if (next != null) remote = next; }
+            // A look at the screen goes to a brain with eyes when hers has none and one is standing by.
+            else if (parts != null && remote != null && !Sighted(remote.Model)) { Cloud eyes = Another(remote, true); if (eyes != null) remote = eyes; }
             string listed = tools ? openAiTools ?? Hands.Tools : null;
             if (remote != null && remote.Claude) return AskClaude(remote, messages, tools, calls, parts, ticket, claudeTools);
             if (remote != null)

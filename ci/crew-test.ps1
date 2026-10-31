@@ -8,11 +8,12 @@ New-Item -ItemType Directory -Path $out -Force | Out-Null
 $crew = Join-Path $root 'app\Crew.cs'
 $memory = Join-Path $root 'app\Memory.cs'
 $mcp = Join-Path $root 'app\Mcp.cs'
+$relay = Join-Path $root 'app\Relay.cs'
 $stubs = Join-Path $PSScriptRoot 'crew-test\Stubs.cs'
 foreach ($test in @('CrewTest', 'MemTest')) {
     $exe = Join-Path $out ($test + '.exe')
     $source = Join-Path $PSScriptRoot ('crew-test\' + $test + '.cs')
-    & $compiler /nologo /langversion:5 /target:exe "/out:$exe" /reference:System.Runtime.Serialization.dll /reference:System.Xml.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll $crew $mcp $memory $stubs $source
+    & $compiler /nologo /langversion:5 /target:exe "/out:$exe" /reference:System.Runtime.Serialization.dll /reference:System.Xml.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll $crew $mcp $relay $memory $stubs $source
     if ($LASTEXITCODE -ne 0) { throw "$test compilation failed." }
     & $exe
     if ($LASTEXITCODE -ne 0) { throw "$test failed ($LASTEXITCODE checks)." }

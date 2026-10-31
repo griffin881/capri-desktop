@@ -191,6 +191,8 @@ namespace CapriDesktop
             brainName = Caption("", 28, 78, Look.Mono(10.5f, FontStyle.Bold, GraphicsUnit.Point), Look.Ink);
             brainNote = Caption("", 28, 100, Font, Look.Dim);
             modelMenu = Dropdown();
+            // Below this brain's own models, every other brain she has keys for, one click away.
+            modelMenu.Opening += delegate { AddOthers(); };
             models = Make("", 28, 134, 244, 28, delegate { modelMenu.Show(models, new Point(0, models.Height)); });
             models.Chevron = true;
             refresh = Make("Refresh", 280, 134, 76, 28, delegate { capri.FindBrain(); });
@@ -789,6 +791,7 @@ namespace CapriDesktop
                 item.Checked = name == chosen;
                 modelMenu.Items.Add(item);
             }
+            ownItems = modelMenu.Items.Count;
             Arrange(false);
         }
 
@@ -805,7 +808,33 @@ namespace CapriDesktop
                 string pick = name;
                 modelMenu.Items.Add(Choice(name, name == remote.Model, delegate { capri.ChooseModel(pick); ShowCloud(remote, found); }));
             }
+            ownItems = modelMenu.Items.Count;
             Arrange(false);
+        }
+
+        private int ownItems;
+
+        private void AddOthers()
+        {
+            while (modelMenu.Items.Count > ownItems && modelMenu.Items.Count > 0) { ToolStripItem extra = modelMenu.Items[modelMenu.Items.Count - 1]; modelMenu.Items.RemoveAt(modelMenu.Items.Count - 1); extra.Dispose(); }
+            List<KeyValuePair<string, List<KeyValuePair<string, Action>>>> others;
+            try { others = capri.OtherBrains(); } catch (Exception) { return; }
+            if (others.Count == 0) return;
+            modelMenu.Items.Add(new ToolStripSeparator());
+            modelMenu.Items.Add(new ToolStripMenuItem("SWITCH BRAIN") { Enabled = false });
+            foreach (KeyValuePair<string, List<KeyValuePair<string, Action>>> group in others)
+            {
+                ToolStripMenuItem head = new ToolStripMenuItem(group.Key);
+                ToolStripDropDownMenu drop = head.DropDown as ToolStripDropDownMenu;
+                if (drop != null) { drop.Renderer = modelMenu.Renderer; drop.BackColor = Look.Panel; drop.ForeColor = Look.Ink; drop.Font = modelMenu.Font; drop.ShowImageMargin = false; }
+                if (group.Value.Count == 0) head.DropDownItems.Add(new ToolStripMenuItem("Loading its models... open this menu again in a moment") { Enabled = false });
+                foreach (KeyValuePair<string, Action> choice in group.Value)
+                {
+                    Action pick = choice.Value;
+                    head.DropDownItems.Add(new ToolStripMenuItem(choice.Key, null, delegate { pick(); }));
+                }
+                modelMenu.Items.Add(head);
+            }
         }
 
         private int KeyRow { get { return tier > 0 ? 128 : 94; } }

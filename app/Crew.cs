@@ -34,6 +34,12 @@ namespace CapriDesktop
         [DataMember] public string Mind;
         // What they two were just talking about, so "that download" means the one they meant.
         [DataMember] public string Context;
+        // A coding job: OpenCode's session, the commit it started from, the branch it works on, and whether the repo was clean then.
+        [DataMember] public string Session;
+        [DataMember] public string Base;
+        [DataMember] public string Branch;
+        [DataMember] public bool WasClean;
+        internal string Diff, Checks;
         internal volatile bool Stop;
         internal volatile Process Running;
         internal bool Finished { get { return Status == "done" || Status == "failed" || Status == "stopped"; } }
@@ -77,6 +83,10 @@ namespace CapriDesktop
         internal Func<List<KeyValuePair<string, string>>> Keys = delegate { return new List<KeyValuePair<string, string>>(); };
         // The OpenCode model for her job brain, like cerebras/gpt-oss-120b, used when they haven't named one.
         internal Func<string> JobCodeModel = delegate { return null; };
+        // Her coding brain: plans, briefs and reviews coding jobs (a model that doesn't refuse security work), and her switchboard OpenCode codes through.
+        internal Func<Brain> CodeHire;
+        internal readonly Relay Relay = new Relay();
+        internal Func<bool> HasCodeBrains = delegate { return false; };
 
         // A small brain on this PC gets short jobs and a short memory of them; a cloud brain gets room to really work.
         internal const int MaxSteps = 16, CloudSteps = 40;
@@ -91,8 +101,11 @@ namespace CapriDesktop
         // Their connected apps (MCP servers), for the apps worker.
         internal readonly Apps Apps;
 
+        private readonly string data;
+
         internal Crew(string data)
         {
+            this.data = data;
             Apps = new Apps(data);
             Apps.Fill = Fill;
             bookPath = Path.Combine(data, "jobs.json");
@@ -187,6 +200,12 @@ namespace CapriDesktop
             try
             {
                 Brain brain = Hire();
+                if (gig.Worker == "builder" && CodeHire != null)
+                {
+                    Brain coder = null;
+                    try { coder = CodeHire(); } catch (Exception) { coder = null; }
+                    if (coder != null && coder.Model != null) brain = coder;
+                }
                 if (brain == null || brain.Model == null) { Finish(gig, "failed", "My brain's offline, so the crew can't work. Set one up in Capri Mainframe first."); return; }
                 gig.Mind = MindName(brain);
                 PlanIt(gig, brain);
@@ -198,7 +217,7 @@ namespace CapriDesktop
                     Set(gig, "running");
                     if (attempt > 1) Note(gig, "Second try, with the overseer's notes.");
                     if (gig.Worker == "research") Research(gig, brain, notes);
-                    else if (gig.Worker == "builder") Build(gig, notes);
+                    else if (gig.Worker == "builder") Build(gig, brain, notes);
                     else if (gig.Worker == "kaggle") Terminal(gig, brain, notes, KagglePrompt + KaggleState());
                     else if (gig.Worker == "apps") AppsWork(gig, brain, notes);
                     else Terminal(gig, brain, notes);
@@ -207,7 +226,8 @@ namespace CapriDesktop
                     GigVerdict verdict = Oversee(gig, brain);
                     gig.Review = verdict.Notes;
                     if (verdict.Verdict == "retry" && attempt < 2) { notes = verdict.Notes; Note(gig, "Overseer sent it back: " + verdict.Notes); continue; }
-                    Finish(gig, verdict.Verdict == "fail" ? "failed" : "done", verdict.Report);
+                    if (gig.Worker == "builder" && verdict.Verdict != "fail") Wrap(gig);
+                    Finish(gig, verdict.Verdict == "fail" ? "failed" : "done", verdict.Report + (gig.Worker == "builder" && gig.Branch != null && verdict.Verdict != "fail" ? " It's on the " + gig.Branch + " branch." : ""));
                     return;
                 }
             }
@@ -235,7 +255,7 @@ namespace CapriDesktop
             "- terminal: runs PowerShell on their PC. Installs, setups, downloads, models, git, moving or making files, checking things.\n" +
             "- kaggle: anything on Kaggle. Runs and sets up their Kaggle notebooks on Kaggle's free GPUs from this PC with the kaggle command: making or editing a notebook, starting a run, checking on it, getting its output, downloading a model onto Kaggle.\n" +
             "- research: searches the web and reads pages, then writes up notes.\n" +
-            "- builder: OpenCode, a coding agent that writes and edits code in a project folder.\n" +
+            "- builder: her coding crew, OpenCode with her coding brains, for real software work in their repos: features, fixes, refactors, debugging, tools, exploits for their own legal security work, new projects. It works on its own git branch and gets reviewed against the diff and the tests.\n" +
             "- apps: works inside their connected apps (listed below, like a real web browser or GitHub) through the apps' own tools, plus PowerShell. Anything that needs clicking around a website, signing into a site, or one of those apps goes here.\n" +
             "Reply with only JSON, no other text: {\"title\": \"a short name for the job, 2 to 5 words\", \"worker\": \"terminal|kaggle|research|builder|apps\", \"plan\": \"what Capri says out loud about the plan\"}.\n" +
             "Use the talk around the job to work out what they really meant (which thing, where), and plan for that.\n" +
@@ -556,26 +576,283 @@ namespace CapriDesktop
             }
         }
 
-        private void Build(Gig gig, string notes)
+        private const string BriefPrompt =
+            "You write the brief a senior engineer hands to a coding agent (OpenCode) that will work alone in the user's repo. The user is a serious developer who works on complex systems, including security tools; take the job as asked.\n" +
+            "From their words and the talk around the job, write: the goal in one or two sentences; the context that matters (what they said, what exists in the repo, decisions already made); the concrete changes or deliverables; constraints (keep their style, don't touch unrelated code, no new heavy dependencies unless needed); and how to verify it (which tests or commands to run, what working looks like).\n" +
+            "Be specific and technical, and don't invent requirements they didn't imply. Plain text with short headings, no preamble.";
+
+        // A coding job: on its own branch, with a real brief, OpenCode through her switchboard, then the actual diff and checks for the reviewer.
+        private void Build(Gig gig, Brain brain, string notes)
         {
             Directory.CreateDirectory(gig.Folder);
-            string prompt = gig.Ask + (string.IsNullOrEmpty(gig.Context) ? "" : "\n\nWhat we were just talking about, for context:\n" + gig.Context) + "\n\nPlan: " + gig.Plan + (string.IsNullOrEmpty(notes) ? "" : "\n\nA reviewer checked your last attempt and said: " + notes) +
-                "\n\nWork in this folder. When you're done, finish with a short summary of what you built or changed, and how to run or use it.";
-            string model = OpenCodeModel();
-            string fallback = JobCodeModel == null ? null : JobCodeModel();
-            if (fallback != null && (string.IsNullOrWhiteSpace(model) || model.Contains(":")))
+            bool fresh = gig.Base == null && gig.Branch == null;
+            if (fresh) Prepare(gig);
+            string briefPath = Path.Combine(home, gig.Id + "-brief.md");
+            string message;
+            if (notes == null)
             {
-                if (!string.IsNullOrWhiteSpace(model)) Note(gig, model.Trim() + " is a small model on this PC, too weak for OpenCode, so it's using " + fallback + " instead.");
+                string brief = null;
+                try { brief = Brain.Visible(brain.Consult(BriefPrompt, "Their job: " + Asked(gig) + "\nPlan: " + gig.Plan + "\nRepo: " + gig.Folder + "\nWhat's in it:\n" + Layout(gig.Folder) + ProjectNotes(gig.Folder), 2500)).Trim(); }
+                catch (Exception error) { Note(gig, "Couldn't write the brief: " + Voice.Short(error.Message)); }
+                if (string.IsNullOrWhiteSpace(brief) || Regex.IsMatch(brief, @"^(I can'?t|I cannot|I won'?t|Sorry)", RegexOptions.IgnoreCase)) brief = "Job: " + gig.Ask + (string.IsNullOrEmpty(gig.Context) ? "" : "\n\nWhat we were just talking about:\n" + gig.Context);
+                brief += "\n\nWhen you're done: run the project's tests or build if it has them, then end with a short summary of what you changed, how to run or use it, and anything left to do.";
+                try { Directory.CreateDirectory(home); File.WriteAllText(briefPath, brief + KeysNote(), new UTF8Encoding(false)); } catch (Exception) { }
+                Note(gig, "Brief written: " + briefPath);
+                message = "Do the job in the attached brief, working in this repo.";
+            }
+            else
+            {
+                try { File.WriteAllText(briefPath, "A reviewer checked your work and found problems:\n" + notes + "\n\nFix them, run the checks again, and end with a short summary of what you changed.", new UTF8Encoding(false)); } catch (Exception) { }
+                message = "The reviewer sent your work back; the attached note says why. Fix it.";
+            }
+            string session = gig.Session ?? (fresh ? RecentSession(gig.Folder) : null);
+            if (session != null && gig.Session == null) Note(gig, "Picking up OpenCode's last session in this repo.");
+            string model = OpenCodeModel();
+            bool own = !string.IsNullOrWhiteSpace(model) && model.Contains("/") && !model.Contains(":");
+            Dictionary<string, string> extra = new Dictionary<string, string>();
+            if (!own && HasCodeBrains())
+            {
+                Relay.Start();
+                model = "capri/" + Relay.ModelName;
+                extra["OPENCODE_CONFIG_CONTENT"] = Relay.OpenCodeConfig();
+            }
+            else if (!own)
+            {
+                string fallback = JobCodeModel == null ? null : JobCodeModel();
                 model = fallback;
             }
-            prompt += KeysNote();
-            string command = "opencode run --auto --dir " + Quote(gig.Folder) + " --title " + Quote(gig.Title) + (string.IsNullOrWhiteSpace(model) ? "" : " --model " + Quote(model.Trim())) + " " + Quote(prompt);
-            Note(gig, "OpenCode is building in " + gig.Folder + (string.IsNullOrWhiteSpace(model) ? "" : " with " + model.Trim()));
+            string line = "opencode run --auto --format json --dir " + Arg(gig.Folder) + " --title " + Arg(gig.Title) + (string.IsNullOrWhiteSpace(model) ? "" : " --model " + Arg(model.Trim())) +
+                (session != null ? " --session " + Arg(session) : "") + " --file " + Arg(briefPath) + " " + Arg(message);
+            Note(gig, "OpenCode is coding in " + gig.Folder + (string.IsNullOrWhiteSpace(model) ? "" : " with " + (model.StartsWith("capri/", StringComparison.Ordinal) ? "her coding brains" : model.Trim())));
+            string last = null;
+            int code = Stream(gig, line, gig.Folder, 3600, extra, delegate(string output)
+            {
+                Dictionary<string, object> e;
+                try { e = AppJson.Object(output.Trim()); } catch (FormatException) { if (output.Trim().Length > 0) Note(gig, "OpenCode: " + Trim(Hide(output.Trim()), 300)); return; }
+                if (e == null) return;
+                string sid = AppJson.Str(e, "sessionID");
+                if (!string.IsNullOrEmpty(sid) && gig.Session != sid) { gig.Session = sid; Save(); }
+                string kind = AppJson.Str(e, "type");
+                Dictionary<string, object> part = AppJson.Obj(e, "part");
+                if (kind == "text") { string said = AppJson.Str(part, "text"); if (!string.IsNullOrWhiteSpace(said)) { last = said.Trim(); Note(gig, "OpenCode: " + Trim(Hide(last), 400)); } }
+                else if (kind == "tool_use")
+                {
+                    Dictionary<string, object> state = AppJson.Obj(part, "state");
+                    Dictionary<string, object> input = AppJson.Obj(state, "input");
+                    string what = AppJson.Str(input, "command") ?? AppJson.Str(input, "filePath") ?? AppJson.Str(input, "pattern") ?? AppJson.Str(input, "path") ?? AppJson.Str(input, "url") ?? "";
+                    string status = AppJson.Str(state, "status") ?? "";
+                    Note(gig, "OpenCode " + (AppJson.Str(part, "tool") ?? "tool") + " " + Trim(Hide(what), 200) + (status == "error" ? " (failed: " + Trim(Hide(AppJson.Str(state, "error") ?? ""), 200) + ")" : ""));
+                }
+                else if (kind == "error") Note(gig, "OpenCode error: " + Trim(Hide(AppJson.Write(e.ContainsKey("error") ? e["error"] : e)), 400));
+            });
+            if (Relay.LastUsed != null && model != null && model.StartsWith("capri/", StringComparison.Ordinal)) Note(gig, "Coding brain used: " + Relay.LastUsed);
+            if (gig.Session != null) RememberSession(gig.Folder, gig.Session);
+            Review(gig);
+            gig.Result = (code == 0 ? "" : "OpenCode exited with code " + code + ".\n") + (last ?? "OpenCode didn't say what it did.") +
+                (gig.Diff != null ? "\n\nChanged:\n" + Trim(DiffStat(gig), 1500) : "") + (gig.Checks != null ? "\n\nChecks:\n" + Trim(gig.Checks, 1200) : "");
+            gig.Result = Hide(gig.Result);
+        }
+
+        private static string Arg(string text) { return "\"" + (text ?? "").Replace("\"", "'") + "\""; }
+
+        private bool IsGit(string folder) { return Directory.Exists(Path.Combine(folder, ".git")) || File.Exists(Path.Combine(folder, ".git")); }
+
+        private string Git(Gig gig, string args, int seconds = 60)
+        {
             int code;
-            string output = Shell(gig, command, gig.Folder, 2400, out code);
-            output = Regex.Replace(output, @"\x1B\[[0-9;?]*[A-Za-z]", "");
-            gig.Result = "OpenCode exited with code " + code + ". The end of its output:\n" + Tail(Hide(output), 3000);
-            Note(gig, "OpenCode finished (exit " + code + ").");
+            string output = Shell(gig, "git " + args + " 2>&1", gig.Folder, seconds, out code);
+            return code == 0 ? output.Trim() : null;
+        }
+
+        // Its own branch, so nothing lands on theirs until they say so. A new project in her jobs folder becomes a repo first.
+        private void Prepare(Gig gig)
+        {
+            if (!IsGit(gig.Folder) && gig.Folder.StartsWith(home, StringComparison.OrdinalIgnoreCase)) Git(gig, "init -q");
+            if (!IsGit(gig.Folder)) { Note(gig, gig.Folder + " isn't a git repo, so the changes go straight in, with no branch to review them on."); return; }
+            gig.Base = Git(gig, "rev-parse HEAD");
+            string dirty = Git(gig, "status --porcelain");
+            gig.WasClean = dirty != null && dirty.Length == 0;
+            string current = Git(gig, "branch --show-current") ?? "";
+            if (current.StartsWith("capri/", StringComparison.Ordinal)) { gig.Branch = current; Note(gig, "Staying on " + current + "."); return; }
+            string slug = Regex.Replace(gig.Title.ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-');
+            if (slug.Length > 30) slug = slug.Substring(0, 30).Trim('-');
+            string branch = "capri/" + gig.Id + "-" + (slug.Length == 0 ? "job" : slug);
+            if (Git(gig, "switch -c " + branch) != null || Git(gig, "checkout -b " + branch) != null) { gig.Branch = branch; Note(gig, "Working on a new branch, " + branch + ", from " + (current.Length == 0 ? "the start" : current) + (gig.WasClean ? "." : " (their uncommitted changes came along).")); }
+            else Note(gig, "Couldn't make a branch, so it works on " + (current.Length == 0 ? "the current one" : current) + ".");
+            Save();
+        }
+
+        // The real changes since the job started, and the project's own tests or build, for the reviewer.
+        private void Review(Gig gig)
+        {
+            gig.Diff = null;
+            gig.Checks = null;
+            if (IsGit(gig.Folder))
+            {
+                Git(gig, "add -A --intent-to-add .");
+                string against = gig.Base ?? "";
+                string diff = Git(gig, "--no-pager diff " + against, 120);
+                string status = Git(gig, "status --short");
+                gig.Diff = (string.IsNullOrEmpty(status) ? "" : "Files:\n" + status + "\n\n") + (diff ?? "");
+                if (gig.Diff.Trim().Length == 0) gig.Diff = "(nothing changed)";
+            }
+            string check = CheckCommand(gig.Folder);
+            if (check == null) return;
+            Note(gig, "Running the checks: " + check);
+            int code;
+            string output = Shell(gig, check, gig.Folder, 900, out code);
+            gig.Checks = check + "\nexit " + code + "\n" + Tail(Hide(Regex.Replace(output, @"\x1B\[[0-9;?]*[A-Za-z]", "")), 3000);
+            Note(gig, "Checks " + (code == 0 ? "passed" : "failed (exit " + code + ")") + ".");
+        }
+
+        private string DiffStat(Gig gig)
+        {
+            string stat = IsGit(gig.Folder) ? Git(gig, "--no-pager diff --stat " + (gig.Base ?? "")) : null;
+            return string.IsNullOrEmpty(stat) ? Trim(gig.Diff ?? "", 600) : stat;
+        }
+
+        // The project's own test or build command, if it has an obvious one.
+        internal static string CheckCommand(string folder)
+        {
+            try
+            {
+                string package = Path.Combine(folder, "package.json");
+                if (File.Exists(package))
+                {
+                    string json = File.ReadAllText(package);
+                    if (Regex.IsMatch(json, @"""test""\s*:\s*""(?!echo \\""Error: no test specified)")) return "npm test --silent";
+                    if (Regex.IsMatch(json, @"""build""\s*:")) return "npm run build --silent";
+                }
+                if (File.Exists(Path.Combine(folder, "Cargo.toml"))) return "cargo test -q";
+                if (File.Exists(Path.Combine(folder, "go.mod"))) return "go test ./...";
+                if (File.Exists(Path.Combine(folder, "pytest.ini")) || File.Exists(Path.Combine(folder, "pyproject.toml")) && Directory.Exists(Path.Combine(folder, "tests")) || File.Exists(Path.Combine(folder, "setup.cfg")) && Directory.Exists(Path.Combine(folder, "tests"))) return "python -m pytest -q";
+                if (Directory.GetFiles(folder, "*.sln").Length > 0 || Directory.GetFiles(folder, "*.csproj").Length > 0) return "dotnet build --nologo -v q";
+                if (File.Exists(Path.Combine(folder, "Makefile")) && Regex.IsMatch(File.ReadAllText(Path.Combine(folder, "Makefile")), @"^test:", RegexOptions.Multiline)) return "make test";
+            }
+            catch (Exception) { }
+            return null;
+        }
+
+        // On the branch, a passed job becomes one commit, unless they had uncommitted work there when it started.
+        private void Wrap(Gig gig)
+        {
+            if (gig.Branch == null || !gig.WasClean || !IsGit(gig.Folder)) return;
+            Git(gig, "add -A");
+            string done = Git(gig, "-c user.name=Capri -c user.email=capri@localhost commit -q -m " + Quote("capri: " + gig.Title));
+            string hash = Git(gig, "rev-parse --short HEAD");
+            if (done != null && hash != null) Note(gig, "Committed " + hash + " on " + gig.Branch + ".");
+            NoteProject(gig);
+        }
+
+        // The top of the repo, so the brief knows what it's working with.
+        private static string Layout(string folder)
+        {
+            try
+            {
+                List<string> names = new List<string>();
+                foreach (string dir in Directory.GetDirectories(folder)) { string n = Path.GetFileName(dir); if (!n.StartsWith(".") && n != "node_modules" && n != "bin" && n != "obj") names.Add(n + "/"); }
+                foreach (string file in Directory.GetFiles(folder)) names.Add(Path.GetFileName(file));
+                names.Sort(StringComparer.OrdinalIgnoreCase);
+                if (names.Count > 60) names = names.GetRange(0, 60);
+                string readme = null;
+                foreach (string name in new[] { "README.md", "readme.md", "README.txt", "AGENTS.md", "CLAUDE.md" }) { string path = Path.Combine(folder, name); if (File.Exists(path)) { readme = name + ":\n" + Trim(File.ReadAllText(path), 2500); break; } }
+                return (names.Count == 0 ? "(empty)" : string.Join("  ", names.ToArray())) + (readme == null ? "" : "\n\n" + readme);
+            }
+            catch (Exception) { return "(couldn't list it)"; }
+        }
+
+        // Her notes on each project, kept in her data folder, never in their repo.
+        private string ProjectFile(string folder)
+        {
+            string name = Regex.Replace(Path.GetFileName(folder.TrimEnd('\\', '/')).ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-');
+            return Path.Combine(Path.Combine(data, "projects"), (name.Length == 0 ? "project" : name) + ".md");
+        }
+
+        private string ProjectNotes(string folder)
+        {
+            try { string path = ProjectFile(folder); return File.Exists(path) ? "\n\nCapri's notes on this project from earlier jobs:\n" + Tail(File.ReadAllText(path), 4000) : ""; }
+            catch (Exception) { return ""; }
+        }
+
+        private void NoteProject(Gig gig)
+        {
+            try
+            {
+                string path = ProjectFile(gig.Folder);
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.AppendAllText(path, "\n## " + DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + " · " + gig.Title + (gig.Branch != null ? " (" + gig.Branch + ")" : "") + "\n" + Trim(gig.Result ?? "", 900) + "\n", new UTF8Encoding(false));
+            }
+            catch (Exception) { }
+        }
+
+        // OpenCode's session per repo, so the next job there picks up with everything it knew.
+        private string SessionsPath { get { return Path.Combine(data, "code-sessions.txt"); } }
+
+        private string RecentSession(string folder)
+        {
+            try
+            {
+                if (!File.Exists(SessionsPath)) return null;
+                foreach (string line in File.ReadAllLines(SessionsPath))
+                {
+                    string[] parts = line.Split('\t');
+                    long ticks;
+                    if (parts.Length == 3 && string.Equals(parts[0], folder, StringComparison.OrdinalIgnoreCase) && long.TryParse(parts[2], out ticks) && DateTime.UtcNow - new DateTime(ticks, DateTimeKind.Utc) < TimeSpan.FromHours(12)) return parts[1];
+                }
+            }
+            catch (Exception) { }
+            return null;
+        }
+
+        private void RememberSession(string folder, string session)
+        {
+            try
+            {
+                List<string> kept = new List<string>();
+                if (File.Exists(SessionsPath)) foreach (string line in File.ReadAllLines(SessionsPath)) if (!line.StartsWith(folder + "\t", StringComparison.OrdinalIgnoreCase)) kept.Add(line);
+                kept.Add(folder + "\t" + session + "\t" + DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture));
+                if (kept.Count > 50) kept.RemoveRange(0, kept.Count - 50);
+                File.WriteAllLines(SessionsPath, kept.ToArray());
+            }
+            catch (Exception) { }
+        }
+
+        // Runs a command through cmd with each output line handed over as it comes, for live progress; stops with the job.
+        private int Stream(Gig gig, string line, string folder, int seconds, Dictionary<string, string> env, Action<string> each)
+        {
+            ProcessStartInfo start = new ProcessStartInfo("cmd.exe", "/d /s /c \"" + line + "\"");
+            start.UseShellExecute = false;
+            start.CreateNoWindow = true;
+            start.RedirectStandardOutput = true;
+            start.RedirectStandardError = true;
+            start.RedirectStandardInput = true;
+            start.StandardOutputEncoding = new UTF8Encoding(false);
+            start.StandardErrorEncoding = new UTF8Encoding(false);
+            start.WorkingDirectory = folder;
+            foreach (KeyValuePair<string, string> key in SavedKeys()) start.EnvironmentVariables[key.Key] = key.Value;
+            if (env != null) foreach (KeyValuePair<string, string> pair in env) start.EnvironmentVariables[pair.Key] = pair.Value;
+            StringBuilder errors = new StringBuilder();
+            using (Process process = new Process { StartInfo = start })
+            {
+                process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) try { each(e.Data); } catch (Exception) { } };
+                process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) lock (errors) { if (errors.Length < 20000) errors.AppendLine(e.Data); } };
+                try { process.Start(); }
+                catch (Exception error) { Note(gig, "Couldn't start it: " + error.Message); return -1; }
+                process.StandardInput.Close();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                gig.Running = process;
+                bool exited = false;
+                Stopwatch took = Stopwatch.StartNew();
+                while (!gig.Stop && took.Elapsed.TotalSeconds < seconds) { if (process.WaitForExit(500)) { exited = true; break; } }
+                if (!exited) { Kill(process); Note(gig, gig.Stop ? "Stopped." : "Stopped after " + seconds / 60 + " minutes: it was taking too long."); }
+                else process.WaitForExit();
+                gig.Running = null;
+                string said;
+                lock (errors) said = errors.ToString().Trim();
+                if (said.Length > 0 && (!exited || process.ExitCode != 0)) Note(gig, "It said: " + Trim(Hide(Regex.Replace(said, @"\x1B\[[0-9;?]*[A-Za-z]", "")), 800));
+                return exited ? process.ExitCode : -1;
+            }
         }
 
         // ---- the overseer ----------------------------------------------------------------------------------
@@ -596,6 +873,10 @@ namespace CapriDesktop
             int from = Math.Max(0, log.Count - 30);
             string user = "They asked: " + Asked(gig) + "\nPlan: " + gig.Plan + "\nWorker: " + gig.Worker + "\nJob folder: " + gig.Folder +
                 "\nWhat the worker did:\n" + string.Join("\n", log.GetRange(from, log.Count - from).ToArray()) + "\n\nThe worker's result:\n" + Trim(gig.Result ?? "(none)", 3500);
+            if (gig.Worker == "builder")
+                user += "\n\nThis is a coding job: judge the real changes and checks below, not the worker's summary. A diff that doesn't do the job, or checks that fail because of it, means retry, with the exact errors in your notes." +
+                    "\n\nThe code changes (git diff):\n" + Trim(gig.Diff ?? "(no git diff: not a git repo, or nothing changed)", 9000) +
+                    "\n\nChecks Capri ran herself:\n" + (gig.Checks ?? "(no test or build command found)");
             GigVerdict verdict = null;
             foreach (Brain brain in new[] { judge, worker })
             {
@@ -800,7 +1081,7 @@ namespace CapriDesktop
             return "terminal";
         }
 
-        internal static string WorkerName(string worker) { return worker == "research" ? "research" : worker == "builder" ? "OpenCode builder" : worker == "kaggle" ? "Kaggle" : worker == "apps" ? "apps" : "terminal"; }
+        internal static string WorkerName(string worker) { return worker == "research" ? "research" : worker == "builder" ? "coding" : worker == "kaggle" ? "Kaggle" : worker == "apps" ? "apps" : "terminal"; }
 
         // An apps job: asked for by kind, or about one of their connected apps, or about clicking around a website when the browser is connected.
         private bool WantsApps(string kind, string ask)
@@ -826,7 +1107,7 @@ namespace CapriDesktop
             });
         }
 
-        internal void Shutdown() { try { Apps.StopAll(); } catch (Exception) { } }
+        internal void Shutdown() { try { Apps.StopAll(); } catch (Exception) { } try { Relay.Stop(); } catch (Exception) { } }
 
         // ---- the apps worker -------------------------------------------------------------------------------
 
@@ -940,9 +1221,38 @@ namespace CapriDesktop
         {
             string wanted = (target ?? "").Trim().Trim('"');
             try { if (wanted.Length > 0 && Path.IsPathRooted(wanted) && Directory.Exists(wanted)) return wanted; } catch (ArgumentException) { }
+            string found = wanted.Length > 1 && !Path.IsPathRooted(wanted) ? FindProject(wanted) : null;
+            if (found != null) return found;
             string slug = Regex.Replace(gig.Title.ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-');
             if (slug.Length > 40) slug = slug.Substring(0, 40).Trim('-');
             return Path.Combine(home, gig.Id + "-" + (slug.Length == 0 ? "job" : slug));
+        }
+
+        // A project they name ("my capri repo", "the harness") in the usual places on their PC, repos first.
+        internal static string FindProject(string name)
+        {
+            string want = Regex.Replace(Regex.Replace(name.ToLowerInvariant(), @"\b(my|the|repo|repository|project|folder|code|codebase)\b", " "), @"[^a-z0-9]+", "");
+            if (want.Length < 2) return null;
+            string user = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            List<string> roots = new List<string> { user, Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory) };
+            foreach (string sub in new[] { "source\\repos", "Documents\\GitHub", "GitHub", "code", "Code", "projects", "Projects", "dev", "repos", "src", "ai-lab", "agent_work" }) roots.Add(Path.Combine(user, sub));
+            string best = null;
+            int bestScore = 0;
+            foreach (string root in roots)
+            {
+                if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) continue;
+                string[] dirs;
+                try { dirs = Directory.GetDirectories(root); } catch (Exception) { continue; }
+                foreach (string dir in dirs)
+                {
+                    string plain = Regex.Replace(Path.GetFileName(dir).ToLowerInvariant(), @"[^a-z0-9]+", "");
+                    int score = plain == want ? 3 : plain.Contains(want) || (want.Contains(plain) && plain.Length >= 4) ? 2 : 0;
+                    if (score == 0) continue;
+                    if (Directory.Exists(Path.Combine(dir, ".git"))) score += 2;
+                    if (score > bestScore) { best = dir; bestScore = score; }
+                }
+            }
+            return best;
         }
 
         private static string Resolve(Gig gig, string path)
