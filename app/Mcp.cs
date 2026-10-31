@@ -376,6 +376,9 @@ namespace CapriDesktop
             {
                 process = started;
                 input = new StreamWriter(started.StandardInput.BaseStream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+                // Windows may have already put a byte-order mark on the pipe when the process started (a UTF-8 console does);
+                // a newline first gives that mark a line of its own, which servers skip as a bad message instead of losing the real first one.
+                input.WriteLine();
             }
             started.BeginOutputReadLine();
         }

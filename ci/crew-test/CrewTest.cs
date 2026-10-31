@@ -27,7 +27,7 @@ namespace CapriDesktop
             {
                 Console.Error.WriteLine("fake: got " + line.Length + " chars");
                 Dictionary<string, object> m;
-                try { m = AppJson.Object(line); } catch (FormatException) { continue; }
+                try { m = AppJson.Object(line); } catch (FormatException) { Console.Error.WriteLine("fake: skipped a line that isn't JSON (" + line.Length + " chars)"); continue; }
                 object id;
                 m.TryGetValue("id", out id);
                 string method = AppJson.Str(m, "method");
