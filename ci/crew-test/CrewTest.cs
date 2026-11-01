@@ -133,7 +133,9 @@ namespace CapriDesktop
             Check(all.Contains("exit 3"), "keeps exit codes");
             Check(all.Contains("oops") && all.Contains("after error"), "keeps errors and carries on");
             Check(worker.Seen.Exists(s => s.Contains("hi there")), "the worker sees command output");
-            Check(said.Count == 2 && said[1] == "Terminal works.", "plan and report spoken");
+            // The report is spoken just after the job is marked done, so give it a moment.
+            for (int i = 0; i < 50; i++) { lock (said) if (said.Count >= 2) break; Thread.Sleep(100); }
+            lock (said) Check(said.Count == 2 && said[1] == "Terminal works.", "plan and report spoken (" + string.Join(" | ", said.ToArray()) + ")");
 
             Brain slow = new Brain();
             slow.Consults.Enqueue("{\"title\":\"Long one\",\"worker\":\"terminal\",\"plan\":\"Waiting around.\"}");
