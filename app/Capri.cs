@@ -4134,7 +4134,10 @@ namespace CapriDesktop
             }
             List<KeyValuePair<string, Action>> local = new List<KeyValuePair<string, Action>>();
             string[] installed = ollamaModels;
-            if (installed == null) ThreadPool.QueueUserWorkItem(delegate { try { ollamaModels = Brain.InstalledModels(); } catch (Exception) { } });
+            // Asked fresh every time the menu opens, so a model pulled or an Ollama started a moment ago shows up on the next open.
+            ThreadPool.QueueUserWorkItem(delegate { try { ollamaModels = Brain.InstalledModels(); ollamaDown = false; } catch (Exception) { ollamaDown = true; } });
+            if (installed == null)
+                local.Add(new KeyValuePair<string, Action>(ollamaDown ? "Ollama isn't running: open Ollama, then open this menu again" : "Checking Ollama... open this menu again in a moment", delegate { }));
             if (installed != null)
                 foreach (string model in installed)
                 {
@@ -4181,6 +4184,7 @@ namespace CapriDesktop
         }
 
         private string[] ollamaModels;
+        private volatile bool ollamaDown;
         private volatile bool pullingLfm3;
 
         // LFM3 through Ollama: pulled once, then she talks with it on this PC.
