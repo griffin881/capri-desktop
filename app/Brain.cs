@@ -300,7 +300,20 @@ namespace CapriDesktop
 
     internal sealed class Brain
     {
-        internal static string Ollama = "http://127.0.0.1:11434";
+        internal static string Ollama = OllamaAddress(Environment.GetEnvironmentVariable("OLLAMA_HOST"));
+
+        // Ollama's own OLLAMA_HOST setting, when they've moved it off 127.0.0.1:11434 (0.0.0.0 means every address, so this PC's own works).
+        internal static string OllamaAddress(string host)
+        {
+            host = (host ?? "").Trim().TrimEnd('/');
+            if (host.Length == 0) return "http://127.0.0.1:11434";
+            if (!host.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !host.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) host = "http://" + host;
+            Uri uri;
+            if (!Uri.TryCreate(host, UriKind.Absolute, out uri)) return "http://127.0.0.1:11434";
+            string name = uri.Host == "0.0.0.0" || uri.Host == "[::]" || uri.Host == "::" || uri.Host.Length == 0 ? "127.0.0.1" : uri.Host;
+            int port = uri.IsDefaultPort && host.IndexOf(":" + uri.Port, StringComparison.Ordinal) < 0 ? 11434 : uri.Port;
+            return uri.Scheme + "://" + name + ":" + port;
+        }
         internal static string OpenAi = "https://api.openai.com";
         internal static string Anthropic = "https://api.anthropic.com";
         internal static string DeepSeek = "https://api.deepseek.com";
@@ -733,9 +746,9 @@ namespace CapriDesktop
             return all ? "Wiped my notes about you." : "Forgot " + (dropped == 1 ? "my note" : dropped + " notes") + " about " + text + ".";
         }
 
-        internal static string[] InstalledModels()
+        internal static string[] InstalledModels(int wait = 3000)
         {
-            HttpWebRequest request = Open("/api/tags", 3000);
+            HttpWebRequest request = Open("/api/tags", wait);
             using (WebResponse response = request.GetResponse())
             using (Stream body = response.GetResponseStream())
             {

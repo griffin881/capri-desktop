@@ -4135,9 +4135,19 @@ namespace CapriDesktop
             List<KeyValuePair<string, Action>> local = new List<KeyValuePair<string, Action>>();
             string[] installed = ollamaModels;
             // Asked fresh every time the menu opens, so a model pulled or an Ollama started a moment ago shows up on the next open.
-            ThreadPool.QueueUserWorkItem(delegate { try { ollamaModels = Brain.InstalledModels(); ollamaDown = false; } catch (Exception) { ollamaDown = true; } });
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                try { ollamaModels = Brain.InstalledModels(10000); ollamaDown = false; ollamaWhy = null; }
+                catch (Exception error)
+                {
+                    ollamaDown = true;
+                    string why = Brain.Ollama + ": " + error.GetType().Name + ": " + error.Message;
+                    if (why != ollamaWhy) Brain.Log(Brain.Ollama + "/api/tags", -1, "brain menu couldn't list Ollama's models: " + error.GetType().Name + ": " + error.Message);
+                    ollamaWhy = why;
+                }
+            });
             if (installed == null)
-                local.Add(new KeyValuePair<string, Action>(ollamaDown ? "Ollama isn't running: open Ollama, then open this menu again" : "Checking Ollama... open this menu again in a moment", delegate { }));
+                local.Add(new KeyValuePair<string, Action>(ollamaDown ? "Can't reach Ollama at " + Brain.Ollama.Replace("http://", "") + (ollamaWhy != null && ollamaWhy.IndexOf("refused", StringComparison.OrdinalIgnoreCase) >= 0 ? " (nothing is listening there)" : ollamaWhy != null && ollamaWhy.IndexOf("timed out", StringComparison.OrdinalIgnoreCase) >= 0 ? " (it didn't answer in 10 seconds)" : "") + ". Open Ollama, then this menu again" : "Checking Ollama... open this menu again in a moment", delegate { }));
             if (installed != null)
                 foreach (string model in installed)
                 {
@@ -4185,6 +4195,7 @@ namespace CapriDesktop
 
         private string[] ollamaModels;
         private volatile bool ollamaDown;
+        private volatile string ollamaWhy;
         private volatile bool pullingLfm3;
 
         // LFM3 through Ollama: pulled once, then she talks with it on this PC.
@@ -11669,6 +11680,7 @@ namespace CapriDesktop
                             Play(idle);
                             if (MouthCell(clock.Elapsed.TotalSeconds, idle) < 0) throw new Exception("Her mouth did not follow the agent's audio.");
                             // Free job brains: a bare key finds its server, links keep their own version path, and each key gets its best free model.
+                            if (Brain.OllamaAddress(null) != "http://127.0.0.1:11434" || Brain.OllamaAddress("0.0.0.0") != "http://127.0.0.1:11434" || Brain.OllamaAddress("0.0.0.0:11500") != "http://127.0.0.1:11500" || Brain.OllamaAddress("http://192.168.1.5:11434/") != "http://192.168.1.5:11434") throw new Exception("Ollama's address setting is read wrong: " + Brain.OllamaAddress("0.0.0.0"));
                             string knownName;
                             if (Cloud.Known("csk-abc123", out knownName) != "https://api.cerebras.ai/v1" || knownName != "Cerebras" || Cloud.Known("AIzaSyX", out knownName) == null || knownName != "Gemini" || Cloud.Known("AQ.Ab8RN6x", out knownName) == null || knownName != "Gemini" || Cloud.Known("sk-proj-1", out knownName) != null) throw new Exception("Free brain keys aren't recognised.");
                             if (Cloud.ApiOf("https://generativelanguage.googleapis.com/v1beta/openai AIza") != "https://generativelanguage.googleapis.com/v1beta/openai" || Cloud.ApiOf("https://api.cerebras.ai/v1 csk") != "https://api.cerebras.ai/v1" || Cloud.ApiOf("https://api.groq.com/openai/v1/ g") != "https://api.groq.com/openai/v1" || Cloud.ApiOf("https://abc.trycloudflare.com x") != "https://abc.trycloudflare.com/v1" || Cloud.ApiOf("http://127.0.0.1:8080/v1/chat/completions") != "http://127.0.0.1:8080/v1") throw new Exception("Server links go to the wrong place: " + Cloud.ApiOf("https://generativelanguage.googleapis.com/v1beta/openai AIza"));
