@@ -8766,7 +8766,7 @@ namespace CapriDesktop
                                     string[] thinkSent;
                                     lock (thinkAsked) thinkSent = thinkAsked.ToArray();
                                     if (first != "Not much, choom." || second != "Still here." || thinkSent.Length != 3) throw new Exception("A thinking model's reply was lost: " + first + " / " + second);
-                                    if (thinkSent[0].IndexOf("\"num_predict\":90", StringComparison.Ordinal) < 0 || thinkSent[1].IndexOf("\"num_predict\":2138", StringComparison.Ordinal) < 0 || thinkSent[2].IndexOf("\"num_predict\":2138", StringComparison.Ordinal) < 0) throw new Exception("A thinking model was not given room to think.");
+                                    if (thinkSent[0].IndexOf("\"num_predict\":600", StringComparison.Ordinal) < 0 || thinkSent[1].IndexOf("\"num_predict\":2648", StringComparison.Ordinal) < 0 || thinkSent[2].IndexOf("\"num_predict\":2648", StringComparison.Ordinal) < 0) throw new Exception("A thinking model was not given room to think.");
                                 }
                                 finally
                                 {
@@ -9603,7 +9603,7 @@ namespace CapriDesktop
                                         new[] { "GET /models ", "Authorization: Bearer " + deepKey },
                                         new[] { "POST /chat/completions ", "\"thinking\":{\"type\":\"disabled\"}", "\"max_tokens\":2000", "\"model\":\"deepseek-flash\"", "You are Capri" },
                                         new[] { "GET /v1/models ", "Authorization: Bearer nvapi-test" },
-                                        new[] { "POST /v1/chat/completions ", "\"max_tokens\":256", "\"chat_template_kwargs\":{\"enable_thinking\":false}", "\"model\":\"google\\/gemma-4-31b-it\"", "You are Capri" }
+                                        new[] { "POST /v1/chat/completions ", "\"max_tokens\":600", "\"chat_template_kwargs\":{\"enable_thinking\":false}", "\"model\":\"google\\/gemma-4-31b-it\"", "You are Capri" }
                                     };
                                     for (int i = 0; i < cloudWanted.Length; i++)
                                         foreach (string part in cloudWanted[i])
