@@ -4166,7 +4166,7 @@ namespace CapriDesktop
                 local.Add(new KeyValuePair<string, Action>("Get LFM3: private and offline, 1.7 GB", delegate { GetLfm3(); }));
             if (local.Count > 0) all.Add(new KeyValuePair<string, List<KeyValuePair<string, Action>>>("On this PC · private", local));
             List<KeyValuePair<string, Action>> phoneLink = new List<KeyValuePair<string, Action>>();
-            phoneLink.Add(new KeyValuePair<string, Action>(crew.Relay.PhoneOn ? "Phone phoneLink is on: copy the Hermes settings again" : "Turn on the phone phoneLink and copy the Hermes settings", delegate { PhoneLink(); }));
+            phoneLink.Add(new KeyValuePair<string, Action>(crew.Relay.PhoneOn ? "Phone link is on: copy the Hermes settings again" : "Turn on the phone link and copy the Hermes settings", delegate { PhoneLink(); }));
             all.Add(new KeyValuePair<string, List<KeyValuePair<string, Action>>>("Phone and Hermes", phoneLink));
             return all;
         }
