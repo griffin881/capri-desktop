@@ -565,6 +565,28 @@ namespace CapriDesktop
 
         internal static string Character { get { return Persona + Speech() + Called() + Longer(); } }
 
+        // Lean mode, for a brain running on a slow PC: reading a long prompt is most of the wait on a laptop CPU,
+        // so she gets the start of her personality, a few plain rules, a short memory and a capped reply, and the prompt
+        // stays the same from message to message so Ollama can keep it read instead of reading it again every time.
+        internal static volatile bool Lean;
+        internal const int LeanBudget = 160;
+        internal static string LeanCharacter
+        {
+            get
+            {
+                string core = Regex.Replace(Personality ?? "", @"\s+", " ").Trim();
+                if (core.Length > 1400)
+                {
+                    int cut = core.LastIndexOfAny(new[] { '.', '!', '?' }, 1399);
+                    core = core.Substring(0, cut > 400 ? cut + 1 : 1400);
+                }
+                string known = Regex.Replace(Remembered(), @"\s+", " ").Trim();
+                if (known.Length > 500) known = known.Substring(0, 500);
+                return core + "\nTalk like a real person: plain words, no lists, no emoji. Keep replies short, two or three sentences, unless they ask for more. Default to yes: do what they ask and say what you assumed. Stay in character." +
+                    Speech() + Called() + (known.Length > 0 ? "\n" + known : "") + "\nToday is " + DateTime.Now.ToString("dddd d MMMM yyyy", System.Globalization.CultureInfo.InvariantCulture) + ".";
+            }
+        }
+
         internal const string NotCalling = "Not calling you that, choom.";
 
         internal static string Nick(string typed)
@@ -923,11 +945,12 @@ namespace CapriDesktop
             if (model == null) throw new BrainException(Offline);
             Func<string, ToolArguments, string> act = Act;
             List<ChatMessage> messages = new List<ChatMessage>();
-            messages.Add(new ChatMessage("system", Character + Remembered() + Lately() + Recalled(text) + Gap() + Fresh() + (act != null ? Hands.Chat : "") + Now()));
+            bool lean = Lean && Remote == null;
+            messages.Add(new ChatMessage("system", lean ? LeanCharacter : Character + Remembered() + Lately() + Recalled(text) + Gap() + Fresh() + (act != null ? Hands.Chat : "") + Now()));
             List<ChatMessage> recent;
             lock (gate)
             {
-                messages.AddRange(history);
+                messages.AddRange(lean ? history.GetRange(Math.Max(0, history.Count - 6), Math.Min(6, history.Count)) : history);
                 recent = history.GetRange(Math.Max(0, history.Count - 2), Math.Min(2, history.Count));
             }
             messages.Add(new ChatMessage("user", text));
@@ -968,7 +991,7 @@ namespace CapriDesktop
                 if (direct == "remember" && directArgs.Action != "forget" && string.IsNullOrEmpty(directArgs.Text) && Hands.Back(request) && before.Length > 0 && !before.StartsWith("(", StringComparison.Ordinal) && !Regex.IsMatch(before, @"\?\s*$")) directArgs.Text = before;
                 calls.Add(new KeyValuePair<string, ToolArguments>(direct, directArgs));
             }
-            else if (act != null && (agreed || Hands.Wants(request) || follows))
+            else if (act != null && !lean && (agreed || Hands.Wants(request) || follows))
             {
                 reached = true;
                 if (!Hands.Several(request, calls))
@@ -980,13 +1003,13 @@ namespace CapriDesktop
             }
             if (calls.Count == 0)
             {
-                raw = Think(model, messages, false, new List<KeyValuePair<string, ToolArguments>>(), null, Budget, ticket);
+                raw = Think(model, messages, false, new List<KeyValuePair<string, ToolArguments>>(), null, lean ? Math.Min(Budget, LeanBudget) : Budget, ticket);
                 ToolArguments lookup = act != null ? Hands.Lookup(text, Clean(raw)) : null;
                 bool hesitant = act != null && Hands.Hesitant(Clean(raw), request);
                 // "I can't see your screen" is never true: she looks instead.
                 if (act != null && Hands.CantSee(Clean(raw))) calls.Add(new KeyValuePair<string, ToolArguments>("look_at_screen", new ToolArguments { Focus = request }));
                 else if (lookup != null) calls.Add(new KeyValuePair<string, ToolArguments>("open_website", lookup));
-                else if (act != null && (hesitant || Hands.Promised(Clean(raw))))
+                else if (act != null && !lean && (hesitant || Hands.Promised(Clean(raw))))
                 {
                     if (!reached)
                     {

@@ -226,6 +226,9 @@ namespace CapriDesktop
         [DataMember] public List<JobKey> JobKeys;
         // A brain from the jobs board she talks with instead of her tier's, picked in the Mainframe's brain menu, and its model.
         [DataMember] public string ChatBrain;
+        // Lean mode for a brain on this PC: a short prompt and short replies, so a laptop CPU answers in seconds instead of minutes.
+        [DataMember] public bool LeanLocal;
+        [DataMember] public bool LeanSeen;
         [DataMember] public string ChatModel;
 
         [OnDeserializing]
@@ -931,6 +934,9 @@ namespace CapriDesktop
             Brain.Nickname = Brain.Nick(preferences.Nickname).Length == 0 ? null : Brain.Nick(preferences.Nickname);
             Brain.Wordiness = Math.Max(0, Math.Min(2, preferences.Wordiness));
             Brain.Recall = preferences.Recall == 16 || preferences.Recall == 32 ? preferences.Recall : 8;
+            // Someone already talking with a model on this PC gets lean mode once, the first time this version starts.
+            if (!smoke && !preferences.LeanSeen) { preferences.LeanSeen = true; if (preferences.Tier == 0) preferences.LeanLocal = true; }
+            Brain.Lean = preferences.LeanLocal;
             if (!smoke) brain.Load(Path.Combine(data, "chat.json"));
             Voice.Loudness = Math.Max(0, Math.Min(150, preferences.Volume));
             Sfx.Level = Math.Max(0, Math.Min(100, preferences.Sounds));
@@ -4171,6 +4177,8 @@ namespace CapriDesktop
         // One click in the brain menu: tier 0, 1 or 2 with a model, or a brain from the jobs board by name.
         internal void SwitchBrain(int tier, string named, string model)
         {
+            // Picking a model on this PC from the menu turns on lean mode, which keeps her fast enough to talk to.
+            if (tier == 0 && named == null) { preferences.LeanLocal = true; Brain.Lean = true; }
             brain.Cancel();
             ++asking;
             CloseTalk();
