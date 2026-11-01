@@ -7903,7 +7903,7 @@ namespace CapriDesktop
                             }
                             checks.Add("PASS speech bubbles reuse unchanged pixels, keep typing and cursor blinks, follow content and layout changes, reopen and animate their glitches");
                             string messy = "<think>hmm</think> *waves* Capri: \"Hey choom!\" 😀";
-                            if (Brain.Clean(messy) != "Hey choom!" || Brain.Clean(new string('a', 300)).Length > 222) throw new Exception("Reply cleanup failed: " + Brain.Clean(messy));
+                            if (Brain.Clean(messy) != "Hey choom!" || Brain.Clean(new string('a', 3000)).Length > 2002) throw new Exception("Reply cleanup failed: " + Brain.Clean(messy));
                             if (Safety.Screen("i want to kill myself") != Safety.HelpLine || Safety.Screen("send nudes") == null || Safety.Screen("how do I kill the boss in Essex?") != null || Safety.Filter("well shit, choom") == "well shit, choom" || Safety.Filter("Hey choom.") != "Hey choom.") throw new Exception("Safety screen failed.");
                             if (Brain.Persona.IndexOf("good boy", StringComparison.Ordinal) < 0 || Safety.Filter("Good boy, choom.") != "Good boy, choom." || Safety.Screen("call me a good boy") != null) throw new Exception("She can't call them good boy.");
                             if (Brain.Persona.IndexOf("a playful chaos gremlin", StringComparison.Ordinal) < 0 || Brain.Persona.IndexOf("openly fond of them", StringComparison.Ordinal) < 0 || Brain.Persona.IndexOf("good boy", StringComparison.Ordinal) < 0 || Brain.Persona.IndexOf("no gushing praise", StringComparison.Ordinal) < 0 || Brain.Persona.IndexOf("Never sound like a corporate assistant", StringComparison.Ordinal) < 0 || Brain.Persona.IndexOf("biggest fan", StringComparison.Ordinal) >= 0 || Brain.Persona.IndexOf("glad they", StringComparison.Ordinal) >= 0) throw new Exception("Her persona lost its playful chaos gremlin, her fondness for them, or its ban on assistant talk and gushing.");
@@ -10236,8 +10236,8 @@ namespace CapriDesktop
                             int loudRate;
                             short[] loudWave = Voice.Samples(Voice.Louder(Voice.Wave(new short[] { 1000, -1000, 30000 }, 24000)), out loudRate);
                             if (preferences.Volume != 50 || loudTest[0] != 500 || loudTest[2] != 15000 || loudWave.Length != 3 || loudWave[1] != -500 || loudRate != 24000) throw new Exception("Her volume did not scale her voice.");
-                            if (!preferences.Wander || preferences.WanderPace != 2 || WanderLevel != 3 || Brain.Wordiness != 1 || Brain.Budget != 180 || Brain.Recall != 16 || Brain.Window != 8192 || preferences.Language != "French" || Brain.LanguageCode(Language) != "fr") throw new Exception("Settings were not saved.");
-                            if (Brain.Character.IndexOf("Always reply in French", StringComparison.Ordinal) < 0 || Brain.Character.IndexOf("up to four sentences", StringComparison.Ordinal) < 0 || Brain.Clean(new string('a', 300)).Length != 300) throw new Exception("Language or reply length did not reach her prompt.");
+                            if (!preferences.Wander || preferences.WanderPace != 2 || WanderLevel != 3 || Brain.Wordiness != 1 || Brain.Budget != 1200 || Brain.Recall != 16 || Brain.Window != 32768 || preferences.Language != "French" || Brain.LanguageCode(Language) != "fr") throw new Exception("Settings were not saved.");
+                            if (Brain.Character.IndexOf("Always reply in French", StringComparison.Ordinal) < 0 || Brain.Character.IndexOf("get full answers", StringComparison.Ordinal) < 0 || Brain.Clean(new string('a', 300)).Length != 300) throw new Exception("Language or reply length did not reach her prompt.");
                             if (parakeet.Language != "fr" || parakeet.Model != LocalEars.EuropeanPack || parakeet.Size != LocalEars.EuropeanSize) throw new Exception("Picking French did not point her ears at the European pack: " + parakeet.Language + " / " + parakeet.Model);
                             if (mainframe.SettingsStatus != "Fran\u00e7ais | 50% | 30% | Often | 10 min | dance | - | Medium | Medium | Quick" || BubbleHold(100) != 4.5 || !preferences.NoIntro || preferences.Sounds != 30 || Sfx.Level != 30 || SleepDue(599000) || !SleepDue(600000)) throw new Exception("The settings page showed the wrong values: " + mainframe.SettingsStatus);
                             mainframe.TypeNickname("  Lachy!!  ");
@@ -10288,7 +10288,7 @@ namespace CapriDesktop
                             SetWordiness(0);
                             SetRecall(8);
                             SetLanguage("English");
-                            if (preferences.Wander || preferences.Language != null || Brain.Language != null || Brain.Character != Brain.Persona || Brain.Clean(new string('a', 300)).Length > 230 || Brain.Window != 4096) throw new Exception("Settings did not go back to their defaults.");
+                            if (preferences.Wander || preferences.Language != null || Brain.Language != null || Brain.Character != Brain.Persona || Brain.Clean(new string('a', 3000)).Length > 2002 || Brain.Window != 4096) throw new Exception("Settings did not go back to their defaults.");
                             if (parakeet.Language != LocalEars.Spoken("en", System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName)) throw new Exception("Going back to English did not point her ears back: " + parakeet.Language);
                             mainframe.ShowSettings(false);
                             if (mainframe.SettingsShown || mainframe.ClientSize.Height != mainTall) throw new Exception("Closing settings did not bring the main page back.");
