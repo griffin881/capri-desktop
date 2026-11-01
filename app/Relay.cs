@@ -25,6 +25,12 @@ namespace CapriDesktop
     {
         private TcpListener listener;
         private Thread loop;
+        private TcpListener phone;
+        // For the phone link: a fixed port and a saved key, so Hermes keeps working after Capri restarts, and her personality added to every request that asks for "capri".
+        internal string PhoneSecret;
+        internal int PhonePort;
+        internal Func<string> Persona;
+        internal const string ChatModelName = "capri";
         internal int Port;
         internal readonly string Secret = Guid.NewGuid().ToString("N");
         // The brains, best first, asked fresh on every request so a saved key takes effect at once.
@@ -49,10 +55,42 @@ namespace CapriDesktop
             }
         }
 
+        // Opens the relay to other devices (WSL, your phone over Tailscale or Wi-Fi). Only requests with the saved key get through.
+        internal bool OpenPhone(int port, string secret)
+        {
+            lock (this)
+            {
+                if (phone != null) return true;
+                try
+                {
+                    phone = new TcpListener(IPAddress.Any, port);
+                    phone.Start();
+                }
+                catch (Exception error) { phone = null; Note("phone link: " + error.Message); return false; }
+                PhonePort = port;
+                PhoneSecret = secret;
+                TcpListener mine = phone;
+                new Thread(delegate ()
+                {
+                    while (true)
+                    {
+                        TcpClient client;
+                        try { client = mine.AcceptTcpClient(); }
+                        catch (Exception) { return; }
+                        ThreadPool.QueueUserWorkItem(delegate { Serve(client); });
+                    }
+                }) { IsBackground = true, Name = "Capri phone link" }.Start();
+                return true;
+            }
+        }
+
+        internal bool PhoneOn { get { lock (this) return phone != null; } }
+
         internal void Stop()
         {
             lock (this)
             {
+                if (phone != null) { try { phone.Stop(); } catch (Exception) { } phone = null; }
                 if (listener == null) return;
                 try { listener.Stop(); } catch (Exception) { }
                 listener = null;
@@ -94,8 +132,8 @@ namespace CapriDesktop
                     byte[] body;
                     if (!ReadRequest(stream, out method, out path, out headers, out body)) return;
                     string auth;
-                    if (!headers.TryGetValue("authorization", out auth) || auth.Trim() != "Bearer " + Secret) { Write(stream, 401, "application/json", "{\"error\":{\"message\":\"Not Capri's key.\"}}"); return; }
-                    if (method == "GET" && path.EndsWith("/models", StringComparison.Ordinal)) { Write(stream, 200, "application/json", "{\"object\":\"list\",\"data\":[{\"id\":\"" + ModelName + "\",\"object\":\"model\",\"owned_by\":\"capri\"}]}"); return; }
+                    if (!headers.TryGetValue("authorization", out auth) || (auth.Trim() != "Bearer " + Secret && (PhoneSecret == null || auth.Trim() != "Bearer " + PhoneSecret))) { Write(stream, 401, "application/json", "{\"error\":{\"message\":\"Not Capri's key.\"}}"); return; }
+                    if (method == "GET" && path.EndsWith("/models", StringComparison.Ordinal)) { Write(stream, 200, "application/json", "{\"object\":\"list\",\"data\":[{\"id\":\"" + ModelName + "\",\"object\":\"model\",\"owned_by\":\"capri\"},{\"id\":\"" + ChatModelName + "\",\"object\":\"model\",\"owned_by\":\"capri\"}]}"); return; }
                     if (method != "POST" || !path.EndsWith("/chat/completions", StringComparison.Ordinal)) { Write(stream, 404, "application/json", "{\"error\":{\"message\":\"Capri only relays chat completions.\"}}"); return; }
                     Forward(stream, Encoding.UTF8.GetString(body));
                 }
@@ -204,6 +242,21 @@ namespace CapriDesktop
             Dictionary<string, object> asked;
             try { asked = AppJson.Object(request); }
             catch (FormatException) { Write(client, 400, "application/json", "{\"error\":{\"message\":\"That request isn't JSON.\"}}"); return; }
+            object named;
+            if (asked.TryGetValue("model", out named) && ChatModelName.Equals(named as string) && Persona != null)
+            {
+                // Asked for "capri": she answers as herself, so her personality and notes go in front of whatever the other app already said.
+                string who = null;
+                try { who = Persona(); } catch (Exception) { }
+                List<object> said = AppJson.List(asked, "messages");
+                if (!string.IsNullOrEmpty(who) && said != null)
+                {
+                    Dictionary<string, object> first = new Dictionary<string, object>();
+                    first["role"] = "system";
+                    first["content"] = who;
+                    said.Insert(0, first);
+                }
+            }
             List<RelayBrain> brains = Brains == null ? new List<RelayBrain>() : Brains();
             List<RelayBrain> order = new List<RelayBrain>();
             foreach (RelayBrain brain in brains) if (!Cold(brain)) order.Add(brain);

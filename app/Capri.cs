@@ -918,6 +918,8 @@ namespace CapriDesktop
             crew.HasCodeBrains = HasCodeBrains;
             crew.Relay.Brains = RelayBrains;
             crew.Relay.Log = delegate(string line) { Brain.Log("coding brains", -1, line); };
+            crew.Relay.Persona = delegate { return Brain.Persona + Brain.Remembered(); };
+            if (!smoke && !testing && File.Exists(PhoneKeyPath())) crew.Relay.OpenPhone(PhonePort, File.ReadAllText(PhoneKeyPath()).Trim());
             crew.Context = delegate { string said = callHeard; return Journal.Recent(14) + (chatting && !string.IsNullOrEmpty(said) ? "\n" + DateTime.Now.ToString("HH:mm") + " them (on the call, just now): " + said : ""); };
             if (!testing) { Hands.LookUp = Crew.LookUp; Hands.Answers = true; }
             Hands.Crew = delegate(string tool, ToolArguments args)
@@ -4163,6 +4165,9 @@ namespace CapriDesktop
             if (installed != null && !Array.Exists(installed, m => Regex.IsMatch(m, "^lfm3")))
                 local.Add(new KeyValuePair<string, Action>("Get LFM3: private and offline, 1.7 GB", delegate { GetLfm3(); }));
             if (local.Count > 0) all.Add(new KeyValuePair<string, List<KeyValuePair<string, Action>>>("On this PC · private", local));
+            List<KeyValuePair<string, Action>> link = new List<KeyValuePair<string, Action>>();
+            link.Add(new KeyValuePair<string, Action>(crew.Relay.PhoneOn ? "Phone link is on: copy the Hermes settings again" : "Turn on the phone link and copy the Hermes settings", delegate { PhoneLink(); }));
+            all.Add(new KeyValuePair<string, List<KeyValuePair<string, Action>>>("Phone and Hermes", link));
             return all;
         }
 
@@ -4207,6 +4212,32 @@ namespace CapriDesktop
         private volatile bool pullingLfm3;
 
         // LFM3 through Ollama: pulled once, then she talks with it on this PC.
+        private const int PhonePort = 47821;
+        private static string PhoneKeyPath() { return Path.Combine(Path.GetDirectoryName(Brain.PersonalityPath), "phone.key"); }
+
+        // Opens her switchboard to other devices (Hermes in WSL, Hermes on your phone over Tailscale) behind a saved key, and copies the settings Hermes needs.
+        private void PhoneLink()
+        {
+            string key;
+            try
+            {
+                string path = PhoneKeyPath();
+                if (!File.Exists(path)) File.WriteAllText(path, "capri-" + Guid.NewGuid().ToString("N"));
+                key = File.ReadAllText(path).Trim();
+            }
+            catch (Exception error) { mainframe.ShowProblem("Couldn't save the phone key: " + error.Message); return; }
+            if (!crew.Relay.OpenPhone(PhonePort, key)) { mainframe.ShowProblem("Couldn't open port " + PhonePort + ". Something else is using it."); return; }
+            string text = "Capri phone link\r\n" +
+                "Model name: capri\r\n" +
+                "API key: " + key + "\r\n" +
+                "Port: " + PhonePort + "\r\n" +
+                "Base URL on this PC: http://127.0.0.1:" + PhonePort + "/v1\r\n" +
+                "Base URL from WSL: http://<your PC's address>:" + PhonePort + "/v1  (in WSL, run: ip route show | awk '/default/{print $3}')\r\n" +
+                "Base URL from your phone: http://<your PC's Tailscale address>:" + PhonePort + "/v1\r\n";
+            try { Clipboard.SetText(text); } catch (Exception) { }
+            mainframe.ShowProblem("Phone link is on, port " + PhonePort + ". The Hermes settings are copied: paste them in a note.");
+        }
+
         private void GetLfm3()
         {
             if (pullingLfm3) return;
