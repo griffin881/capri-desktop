@@ -8462,14 +8462,19 @@ namespace CapriDesktop
                                                 string vaultBandit = File.ReadAllText(Path.Combine(vaultDir, "Security", "Bandit.md"));
                                                 string vaultEscaped = Hands.Do("vault", new ToolArguments { Action = "new", Name = "../../outside", Text = "x" });
                                                 string vaultContext = Vault.Context("how's my bandit rot13 going");
+                                                string vaultTool;
+                                                ToolArguments vaultArgs;
+                                                bool vaultHeard = Hands.Heard("search my vault for bandit", out vaultTool, out vaultArgs) && vaultTool == "vault" && vaultArgs.Action == "search" && vaultArgs.Search == "bandit"
+                                                    && Hands.Heard("add went to the meeting to my daily note", out vaultTool, out vaultArgs) && vaultTool == "vault" && vaultArgs.Action == "today" && vaultArgs.Text == "- went to the meeting"
+                                                    && !(Hands.Heard("the vault in that movie was crazy", out vaultTool, out vaultArgs) && vaultTool == "vault");
                                                 if (vaultMissing != Vault.Missing || vaultSet.IndexOf("Got your vault: Orbit Vault, 1 note", StringComparison.Ordinal) != 0 || vaultFound.IndexOf("Security/Bandit.md", StringComparison.Ordinal) < 0
                                                     || vaultAdded != "Started today's note and added it." || !File.Exists(vaultDaily) || File.ReadAllText(vaultDaily).IndexOf("Went to the DSA meeting", StringComparison.Ordinal) < 0
                                                     || vaultMade.IndexOf("already in your vault", StringComparison.Ordinal) < 0 || vaultBandit.IndexOf("Level 11 is ROT13", StringComparison.Ordinal) < 0 || vaultBandit.IndexOf("Level 12 is a hexdump.", StringComparison.Ordinal) < 0
-                                                    || File.Exists(Path.Combine(vaultRoot, "outside.md")) || vaultContext.IndexOf("Security/Bandit.md", StringComparison.Ordinal) < 0
+                                                    || File.Exists(Path.Combine(vaultRoot, "outside.md")) || vaultContext.IndexOf("Security/Bandit.md", StringComparison.Ordinal) < 0 || !vaultHeard
                                                     || !Hands.Wants("what's in my vault about bandit") || !Hands.Wants("add this to my daily note") || Hands.Wants("save my api key in the vault")
                                                     || !Hands.Valid("vault", new ToolArguments { Action = "today" }) || Hands.Valid("vault", new ToolArguments { Action = "delete", Name = "Bandit" }))
                                                     throw new Exception("Her Obsidian vault went wrong: " + vaultMissing + " | " + vaultSet + " | " + vaultFound + " | " + vaultAdded + " | " + vaultMade + " | " + vaultEscaped + " | " + vaultContext);
-                                                checks.Add("PASS Obsidian vault: she finds the vault they point her at, searches and reads it, adds to today's daily note and to notes without ever overwriting one, never writes outside it, and brings matching notes into chat");
+                                                checks.Add("PASS Obsidian vault: she finds the vault they point her at, searches and reads it (plain asks need no brain call), adds to today's daily note and to notes without ever overwriting one, never writes outside it, and brings matching notes into chat");
                                             }
                                             finally { Vault.SavedPath = vaultSavedWas; Vault.Find = vaultFindWas; Vault.Refresh(); try { Directory.Delete(vaultRoot, true); } catch (Exception) { } }
                                             Brain deepBrain = new Brain();

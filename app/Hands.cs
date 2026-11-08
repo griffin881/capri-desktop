@@ -580,6 +580,14 @@ namespace CapriDesktop
             string pressed = ShortcutFor(text);
             if (pressed != null) { tool = "shortcut"; args.Name = pressed; return true; }
             if (ScreenAsk.IsMatch(text) || ScreenQuestion.IsMatch(text)) { tool = "look_at_screen"; args.Focus = ScreenQuestion.IsMatch(text) ? text : null; return true; }
+            // Their vault in plain words, with no brain call, so it works on a brain on this PC in lean mode too.
+            Match vaulted = Regex.Match(text, @"^(?:search|check|look (?:in|through)|go through|dig (?:in|through)) (?:my |the )?(?:obsidian(?: vault)?|vault|second brain)(?: for| about| on)? (.{2,80})$", RegexOptions.IgnoreCase);
+            if (!vaulted.Success) vaulted = Regex.Match(text, @"^what(?:'s| is| does| do i have)(?: in)? (?:my |the )?(?:obsidian(?: vault)?|vault|notes in (?:my |the )?vault)(?: say| have)? (?:about|on) (.{2,80})$", RegexOptions.IgnoreCase);
+            if (vaulted.Success) { tool = "vault"; args.Action = "search"; args.Search = vaulted.Groups[1].Value.Trim(); return true; }
+            vaulted = Regex.Match(text, @"^(?:add|put|log|write|jot(?: down)?|note(?: down)?) (.{2,400}?) (?:to|in|into|on) (?:my |the )?(?:today'?s )?(?:daily note|note for today)$", RegexOptions.IgnoreCase);
+            if (vaulted.Success && !Regex.IsMatch(vaulted.Groups[1].Value.Trim(), @"^(it|that|this|these|those|them|something|stuff)$", RegexOptions.IgnoreCase)) { tool = "vault"; args.Action = "today"; args.Text = "- " + vaulted.Groups[1].Value.Trim(); return true; }
+            vaulted = Regex.Match(text, @"^my (?:obsidian )?vault is (?:at |in )(.{3,260})$", RegexOptions.IgnoreCase);
+            if (vaulted.Success) { tool = "vault"; args.Action = "set"; args.Text = vaulted.Groups[1].Value.Trim().Trim('"'); return true; }
             bool question = Regex.IsMatch((said ?? "").Trim(), @"\?\s*$");
             // "Can you remember that I main Jett?" asks her to save it; "remember when we played?" is chat.
             bool polite = Regex.IsMatch(Opener.Replace((said ?? "").Trim(), ""), @"^((hey|yo|ok|okay)[\s,]+)?(capri[\s,]+)?(can|could|would|will) (you|u)\b", RegexOptions.IgnoreCase);
