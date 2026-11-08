@@ -899,6 +899,8 @@ namespace CapriDesktop
             Brain.MemoryPath = Path.Combine(data, "me.md");
             Journal.Folder = data;
             Orbits.FilePath = Path.Combine(data, "orbits.json");
+            Vault.SavedPath = Path.Combine(data, "vault.txt");
+            if (smoke) Vault.Find = delegate { return null; };
             Brain.PersonalityPath = Path.Combine(data, Brain.PersonalityName);
             if (smoke) foreach (string old in new[] { Brain.PersonalityPath, Brain.PersonalityBackup }) if (File.Exists(old)) File.Delete(old);
             Brain.MakePersonality();
@@ -8437,6 +8439,52 @@ namespace CapriDesktop
                                                 throw new Exception("Writing notes went wrong: " + wrote + " | " + added + " | " + noted.Replace("\r\n", "\\n"));
                                         }
                                         finally { Hands.NotesHome = notesWas; Hands.ShowNote = showWas; try { Directory.Delete(notesDir, true); } catch (Exception) { } }
+                                        {
+                                            string vaultRoot = Path.Combine(Path.GetTempPath(), "capri-vault-" + Guid.NewGuid().ToString("N"));
+                                            string vaultDir = Path.Combine(vaultRoot, "Orbit Vault");
+                                            string vaultSavedWas = Vault.SavedPath;
+                                            Func<string> vaultFindWas = Vault.Find;
+                                            try
+                                            {
+                                                Directory.CreateDirectory(Path.Combine(vaultDir, ".obsidian"));
+                                                Directory.CreateDirectory(Path.Combine(vaultDir, "Security"));
+                                                File.WriteAllText(Path.Combine(vaultDir, ".obsidian", "daily-notes.json"), "{\"folder\":\"Daily\",\"format\":\"YYYY-MM-DD\"}");
+                                                File.WriteAllText(Path.Combine(vaultDir, "Security", "Bandit.md"), "# Bandit\n\nLevel 11 is ROT13 with tr.\n");
+                                                Vault.SavedPath = Path.Combine(vaultRoot, "vault.txt");
+                                                Vault.Find = delegate { return null; };
+                                                Vault.Refresh();
+                                                string vaultMissing = Hands.Do("vault", new ToolArguments { Action = "recent" });
+                                                string vaultSet = Hands.Do("vault", new ToolArguments { Action = "set", Text = vaultDir });
+                                                string vaultFound = Hands.Do("vault", new ToolArguments { Action = "search", Search = "rot13" });
+                                                string vaultAdded = Hands.Do("vault", new ToolArguments { Action = "today", Text = "- Went to the DSA meeting" });
+                                                string vaultDaily = Path.Combine(vaultDir, "Daily", DateTime.Now.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) + ".md");
+                                                string vaultMade = Hands.Do("vault", new ToolArguments { Action = "new", Name = "Security/Bandit", Text = "Level 12 is a hexdump." });
+                                                string vaultBandit = File.ReadAllText(Path.Combine(vaultDir, "Security", "Bandit.md"));
+                                                string vaultEscaped = Hands.Do("vault", new ToolArguments { Action = "new", Name = "../../outside", Text = "x" });
+                                                string vaultContext = Vault.Context("how's my bandit rot13 going");
+                                                if (vaultMissing != Vault.Missing || vaultSet.IndexOf("Got your vault: Orbit Vault, 1 note", StringComparison.Ordinal) != 0 || vaultFound.IndexOf("Security/Bandit.md", StringComparison.Ordinal) < 0
+                                                    || vaultAdded != "Started today's note and added it." || !File.Exists(vaultDaily) || File.ReadAllText(vaultDaily).IndexOf("Went to the DSA meeting", StringComparison.Ordinal) < 0
+                                                    || vaultMade.IndexOf("already in your vault", StringComparison.Ordinal) < 0 || vaultBandit.IndexOf("Level 11 is ROT13", StringComparison.Ordinal) < 0 || vaultBandit.IndexOf("Level 12 is a hexdump.", StringComparison.Ordinal) < 0
+                                                    || File.Exists(Path.Combine(vaultRoot, "outside.md")) || vaultContext.IndexOf("Security/Bandit.md", StringComparison.Ordinal) < 0
+                                                    || !Hands.Wants("what's in my vault about bandit") || !Hands.Wants("add this to my daily note") || Hands.Wants("save my api key in the vault")
+                                                    || !Hands.Valid("vault", new ToolArguments { Action = "today" }) || Hands.Valid("vault", new ToolArguments { Action = "delete", Name = "Bandit" }))
+                                                    throw new Exception("Her Obsidian vault went wrong: " + vaultMissing + " | " + vaultSet + " | " + vaultFound + " | " + vaultAdded + " | " + vaultMade + " | " + vaultEscaped + " | " + vaultContext);
+                                                checks.Add("PASS Obsidian vault: she finds the vault they point her at, searches and reads it, adds to today's daily note and to notes without ever overwriting one, never writes outside it, and brings matching notes into chat");
+                                            }
+                                            finally { Vault.SavedPath = vaultSavedWas; Vault.Find = vaultFindWas; Vault.Refresh(); try { Directory.Delete(vaultRoot, true); } catch (Exception) { } }
+                                            Brain deepBrain = new Brain();
+                                            Cloud deepNvidia = new Cloud("nvapi-test", "nvidia/nemotron-3.5-super-vl-120b-a12b");
+                                            Cloud deepRouter = new Cloud("sk-or-v1-test", "deepseek/deepseek-v4-pro:free");
+                                            deepBrain.Remote = deepNvidia;
+                                            deepBrain.Spares = delegate { return new List<Cloud> { deepRouter }; };
+                                            bool deepPicked = deepBrain.Sharpest() == deepRouter;
+                                            deepBrain.Remote = new Cloud("http://127.0.0.1:8080/v1", "qwen3.5-35b-abliterated");
+                                            bool deepPrivate = deepBrain.Sharpest() == null;
+                                            if (!deepPicked || !deepPrivate || !Brain.Weighty("why did the tea party's inside strategy work when the progressive caucus didn't?") || !Brain.Weighty("how do I get tr to do rot13 on a file in bash")
+                                                || Brain.Weighty("lol nice") || Brain.Weighty("(You glanced at their screen: they're reading about dialectics)") || Brain.Smarts("moonshotai/kimi-k2-instruct") >= Brain.Smarts("openai/gpt-oss-120b"))
+                                                throw new Exception("Thinking harder went wrong: " + deepPicked + " / " + deepPrivate);
+                                            checks.Add("PASS thinking harder: real questions get her sharpest saved brain and room to think, banter and glances stay quick, and a brain on their own PC or server never hands a question to the cloud");
+                                        }
                                         string kaggleWas = Crew.KaggleHome;
                                         string kaggleDir = Path.Combine(Path.GetTempPath(), "capri-kaggle-" + Guid.NewGuid().ToString("N"));
                                         Crew.KaggleHome = kaggleDir;
