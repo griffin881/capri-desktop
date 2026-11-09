@@ -99,7 +99,7 @@ namespace CapriDesktop
 
     internal static class Computer
     {
-        internal const int Longest = 1280;
+        internal const int Longest = 1568;
         internal const string Bigger = "Bigger brain models handle jobs like this better. Pick one under BRAIN in Capri Mainframe.";
         internal const string Confused = "Got lost before I could start that job. " + Bigger;
         internal const string Stalled = "Got stuck on that one. " + Bigger;

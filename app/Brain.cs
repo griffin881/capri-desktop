@@ -948,8 +948,9 @@ namespace CapriDesktop
             Func<string, ToolArguments, string> act = Act;
             List<ChatMessage> messages = new List<ChatMessage>();
             bool lean = Lean && Remote == null;
-            bool deep = !lean && Weighty(text);
-            messages.Add(new ChatMessage("system", lean ? LeanCharacter : Character + Remembered() + Lately() + Recalled(text) + Vault.Context(text) + Gap() + Fresh() + (act != null ? Hands.Chat : "") + (deep ? Depth : "") + Now()));
+            bool coding = !lean && Coding(text);
+            bool deep = !lean && (coding || Weighty(text));
+            messages.Add(new ChatMessage("system", lean ? LeanCharacter : Character + Remembered() + Lately() + Recalled(text) + Vault.Context(text) + (coding ? Pairing + Coder.Context() : "") + Gap() + Fresh() + (act != null ? Hands.Chat : "") + (deep ? Depth : "") + Now()));
             List<ChatMessage> recent;
             lock (gate)
             {
@@ -1350,6 +1351,21 @@ namespace CapriDesktop
         }
 
         internal const string Depth = "\nThis is a real question, so give it your full mind. Think it through before you answer, get the substance right, and answer with depth and precision, like the sharpest person they know: work with their actual argument, name the mechanism, show the steps or the code, use the specifics from their notes when they fit, and push back where they're wrong. Still you, in your own voice, but no filler and no hedging.";
+
+        // Pairing on their code: a bug, an error, a stuck build, a file they're working in, a why-does-this question about code.
+        private static readonly Regex Code = new Regex(@"\b(bug|crash(ing|ed|es)?|stack ?trace|\w*exception|null ?(ref|pointer|reference)|segfault|traceback|compiler?|compile|build (error|fail|is failing|won'?t|isn'?t)|won'?t build|won'?t compile|doesn'?t compile|build fail\w*|my project|the project|project (build|compile|won'?t)|project is (failing|broken)|solution|syntax error|undefined|unresolved|cannot find|not defined|red squiggl\w*|error (message|on line|CS\d|TS\d)|[A-Za-z_][\w./-]*\.(cs|js|jsx|ts|tsx|py|java|cpp|cc|go|rs|rb|php|html?|css|json|sh|ps1)\b|function|method|variable|loop|array|compiler|refactor|debug(ging)?|breakpoint|the code|my code|this code|our code|codebase|repo\b|pull request|merge conflict)\b", RegexOptions.IgnoreCase);
+        private static readonly Regex StuckOn = new Regex(@"\b(what'?s wrong|why (is|does|won'?t|isn'?t|doesn'?t|did)|how (do|can|would) i (fix|make|get|write|add|change)|fix (this|it|my|the)|help me (with|fix|debug|build|write)|stuck on|not working|doesn'?t work|isn'?t working|keeps (failing|crashing|breaking)|look at (my|the|this) (screen|code|error))\b", RegexOptions.IgnoreCase);
+
+        internal static bool Coding(string text)
+        {
+            string said = (text ?? "").Trim();
+            if (said.StartsWith("(", StringComparison.Ordinal)) return false;
+            // A pasted code block, or coding words plus a stuck/how phrasing.
+            if (Regex.IsMatch(said, @"```|(^|\n)\s{4}\S|;\s*$|[{}]\s*$")) return Code.IsMatch(said) || said.Length > 40;
+            return Code.IsMatch(said) && (StuckOn.IsMatch(said) || said.Length < 140);
+        }
+
+        internal const string Pairing = "\nThey're working on real code and want you as their pair, not a hint machine and not a background job. Diagnose from the truth, not a guess: call look_at_screen to see what they're looking at, then use the code tool to read the real file (use the line from any error) and to build the project for the true compiler error. Say the actual cause in plain words, point at the exact line, then walk them through the fix step by step so they understand it and do the typing themselves. Don't withhold the answer to drag out a lesson, and don't hand their code to a job or the crew. You read and compile; they type.";
 
         // The smartest brains first. A brain on their own PC or their own server stays private, so a deep question never leaves it.
         private static readonly string[] Smartest = { @"claude-(opus|fable|mythos)", @"gpt-[6-9]|gpt-5(\.\d+)?($|-(pro|codex|chat))", @"gemini-([3-9]|\d\d)(\.\d+)?-pro", @"claude-sonnet", @"deepseek-v4(\.\d+)?-pro", @"kimi-k[2-9]", @"glm-5", @"qwen-?3(\.\d+)?-(max|397b|235b)", @"deepseek-v4", @"deepseek-(v3|r1|reasoner|chat)", @"gpt-oss-120b", @"nemotron.*(ultra|super)", @"llama-4-maverick", @"gemini-([3-9]|\d\d)(\.\d+)?-flash(?!-lite)" };

@@ -901,6 +901,8 @@ namespace CapriDesktop
             Orbits.FilePath = Path.Combine(data, "orbits.json");
             Vault.SavedPath = Path.Combine(data, "vault.txt");
             if (smoke) Vault.Find = delegate { return null; };
+            Coder.RootsPath = Path.Combine(data, "projects.txt");
+            if (smoke) Coder.RunBuild = delegate(string folder, string command) { return "stub build output"; };
             Brain.PersonalityPath = Path.Combine(data, Brain.PersonalityName);
             if (smoke) foreach (string old in new[] { Brain.PersonalityPath, Brain.PersonalityBackup }) if (File.Exists(old)) File.Delete(old);
             Brain.MakePersonality();
@@ -8489,6 +8491,39 @@ namespace CapriDesktop
                                                 || Brain.Weighty("lol nice") || Brain.Weighty("(You glanced at their screen: they're reading about dialectics)") || Brain.Smarts("moonshotai/kimi-k2-instruct") >= Brain.Smarts("openai/gpt-oss-120b"))
                                                 throw new Exception("Thinking harder went wrong: " + deepPicked + " / " + deepPrivate);
                                             checks.Add("PASS thinking harder: real questions get her sharpest saved brain and room to think, banter and glances stay quick, and a brain on their own PC or server never hands a question to the cloud");
+                                            {
+                                                string codeRoot = Path.Combine(Path.GetTempPath(), "capri-code-" + Guid.NewGuid().ToString("N"));
+                                                string codeProj = Path.Combine(codeRoot, "capri-desktop");
+                                                string codeRootsWas = Coder.RootsPath;
+                                                Func<string, string, string> codeBuildWas = Coder.RunBuild;
+                                                try
+                                                {
+                                                    Directory.CreateDirectory(Path.Combine(codeProj, "app"));
+                                                    Directory.CreateDirectory(Path.Combine(codeProj, "bin"));
+                                                    File.WriteAllText(Path.Combine(codeProj, "Capri.csproj"), "<Project></Project>");
+                                                    File.WriteAllText(Path.Combine(codeProj, "app", "Brain.cs"), "line1\nline2\npublic void Think() {\n  int x = parse(cfg);\n}\n");
+                                                    File.WriteAllText(Path.Combine(codeProj, "bin", "junk.cs"), "ignore me");
+                                                    Coder.RootsPath = Path.Combine(codeRoot, "projects.txt");
+                                                    Coder.RunBuild = delegate(string folder, string command) { return "Brain.cs(4,11): error CS0103: 'parse' does not exist\nBuild FAILED."; };
+                                                    string codeMissing = Coder.Handle(new ToolArguments { Action = "build" });
+                                                    string codeSet = Coder.Handle(new ToolArguments { Action = "set", Text = codeProj });
+                                                    string codeRead = Coder.Handle(new ToolArguments { Action = "read", Name = "Brain.cs(4,11)" });
+                                                    string codeFind = Coder.Handle(new ToolArguments { Action = "find", Search = "parse" });
+                                                    string codeBuild = Coder.Handle(new ToolArguments { Action = "build" });
+                                                    string codeTree = Coder.Handle(new ToolArguments { Action = "tree" });
+                                                    string codeTool;
+                                                    ToolArguments codeArgs;
+                                                    bool codeHeard = Hands.Heard("my project is at " + codeProj, out codeTool, out codeArgs) && codeTool == "code" && codeArgs.Action == "set";
+                                                    if (codeMissing != Coder.Missing || codeSet.IndexOf("I'm in capri-desktop", StringComparison.Ordinal) < 0
+                                                        || codeRead.IndexOf(">>4 | ", StringComparison.Ordinal) < 0 || codeFind.IndexOf("app/Brain.cs:4:", StringComparison.Ordinal) < 0
+                                                        || codeBuild.IndexOf("error CS0103", StringComparison.Ordinal) < 0 || codeTree.IndexOf("app/Brain.cs", StringComparison.Ordinal) < 0 || codeTree.IndexOf("junk.cs", StringComparison.Ordinal) >= 0
+                                                        || !codeHeard || !Brain.Coding("what's wrong with my code, the build is failing") || !Brain.Coding("I'm getting a NullReferenceException on line 12") || Brain.Coding("why is palestine such a big thing")
+                                                        || !Hands.Valid("code", new ToolArguments { Action = "read", Name = "Brain.cs" }) || Hands.Valid("code", new ToolArguments { Action = "read" }))
+                                                        throw new Exception("Pairing on code went wrong: " + codeMissing + " | " + codeSet + " | " + codeRead + " | " + codeFind + " | " + codeBuild);
+                                                    checks.Add("PASS pairing on code: she reads the real file and lands on the error's line, finds text, builds for the true compiler error, skips build output, takes a plain \"my project is at\" and knows a stuck coding question from small talk");
+                                                }
+                                                finally { Coder.RootsPath = codeRootsWas; Coder.RunBuild = codeBuildWas; try { Directory.Delete(codeRoot, true); } catch (Exception) { } }
+                                            }
                                         }
                                         string kaggleWas = Crew.KaggleHome;
                                         string kaggleDir = Path.Combine(Path.GetTempPath(), "capri-kaggle-" + Guid.NewGuid().ToString("N"));
@@ -11785,7 +11820,7 @@ namespace CapriDesktop
                             if (bestOf("gemini-2.5-flash,claude-sonnet-4-5-20250929,claude-sonnet-4-5,claude-sonnet-4,claude-3-5-sonnet,claude-opus-5") != "claude-sonnet-4-5" || bestOf("gemini-2.5-flash,gemini-3.8-flash,gemini-3.8-flash-lite,gemini-4-argon,gpt-6.1") != "gemini-3.8-flash" || bestOf("gpt-4o,gpt-5.6,gpt-5.6-mini,gpt-6") != "gpt-6" || bestOf("qwen3-30b-a3b") != Agent.OldMind || Agent.Best(null) != Agent.OldMind) throw new Exception("Her call brain pick is wrong: " + bestOf("gemini-2.5-flash,claude-sonnet-4-5-20250929,claude-sonnet-4-5,claude-sonnet-4"));
                             string[] wanted = { "http POST /v1/convai/agents/create sk_test_capri_1234 {\"name\":\"Capri\"", "\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45}", "http PATCH /v1/convai/agents/agent_old sk_test_capri_1234 {\"conversation_config\":{\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45},\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "\"tool_ids\":[\"tool_kept\",\"tool_1\",\"tool_2\",\"tool_3\",\"tool_4\",\"tool_5\",\"tool_6\",\"tool_7\",\"tool_8\",\"tool_9\",\"tool_10\",\"tool_11\",\"tool_12\",\"tool_13\",\"tool_14\"]", "\"tool_ids\":[\"tool_kept\",\"tool_15\",\"tool_16\",\"tool_17\",\"tool_18\",\"tool_19\",\"tool_20\",\"tool_21\",\"tool_22\",\"tool_23\",\"tool_24\",\"tool_25\",\"tool_26\",\"tool_27\",\"tool_28\"]}}}}", "\"name\":\"play_music\"", "\"name\":\"app_window\"", "\"name\":\"look_at_screen\"", "http GET /v1/convai/tools sk_test_capri_1234", "http POST /v1/convai/tools sk_test_capri_1234 {\"tool_config\":{\"type\":\"client\",\"name\":\"open_website\"", "\"name\":\"media\",\"description\":\"Control the music", "\"expects_response\":true,\"response_timeout_secs\":20}}", "You have tools for their PC", "tool {\"type\":\"client_tool_result\",\"tool_call_id\":\"call_1\",\"result\":\"Opened Spotify.\",\"is_error\":false}", "ran SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify", "Never check in", "beg them to talk or say they left you hanging", "\"prompt\":{\"prompt\":\"You are Capri", "\"llm\":\"claude-sonnet-5\"", "http GET /v1/convai/llm/list sk_test_capri_1234", "\"tts\":{\"voice_id\":\"abc\"}", "\"overrides\":{\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":true}},\"tts\":{\"voice_id\":true}}}", "http GET /v1/convai/conversation/get-signed-url?agent_id=agent_old sk_test_capri_1234", "init {\"type\":\"conversation_initiation_client_data\",\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "pong {\"type\":\"pong\",\"event_id\":7}", "chunk silent | chunk loud | chunk loud" };
                             foreach (string piece in wanted) if (log.IndexOf(piece, StringComparison.Ordinal) < 0) throw new Exception("Agent traffic was missing " + piece + ": " + log);
-                            if (log.IndexOf("tool_stale", StringComparison.Ordinal) >= 0 || System.Text.RegularExpressions.Regex.Matches(log, "http POST /v1/convai/tools").Count != 30) throw new Exception("Voice chat reused a stale tool or remade a kept one: " + log);
+                            if (log.IndexOf("tool_stale", StringComparison.Ordinal) >= 0 || System.Text.RegularExpressions.Regex.Matches(log, "http POST /v1/convai/tools").Count != 32) throw new Exception("Voice chat reused a stale tool or remade a kept one: " + log);
                             Hands.Run = handsRun;
                             Hands.Catalog = handsCatalog;
                             Hands.Forget();
