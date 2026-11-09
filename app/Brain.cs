@@ -950,7 +950,7 @@ namespace CapriDesktop
             bool lean = Lean && Remote == null;
             bool coding = !lean && Coding(text);
             bool deep = !lean && (coding || Weighty(text));
-            messages.Add(new ChatMessage("system", lean ? LeanCharacter : Character + Remembered() + Lately() + Recalled(text) + Vault.Context(text) + (coding ? Pairing + Coder.Context() : "") + Gap() + Fresh() + (act != null ? Hands.Chat : "") + (deep ? Depth : "") + Now()));
+            messages.Add(new ChatMessage("system", lean ? LeanCharacter : Character + Remembered() + Lately() + Recalled(text) + Vault.Context(text) + (coding ? Pairing + Coder.Context() : "") + Phone.Waiting() + Gap() + Fresh() + (act != null ? Hands.Chat : "") + (deep ? Depth : "") + Now()));
             List<ChatMessage> recent;
             lock (gate)
             {

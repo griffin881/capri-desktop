@@ -784,6 +784,10 @@ namespace CapriDesktop
         private volatile Agent agent;
         private bool chatting;
         private bool dropping;
+        // Talking over her on a call: her echo is held back, a real voice over her cuts in. hushUntil drops her in-flight audio after a cut-in until ElevenLabs catches up.
+        private readonly Barge barge = new Barge();
+        private Agent bargeFor;
+        private double hushUntil;
         private int chatTicket;
         private const double WakeLevel = 0.02;
         private readonly object waking = new object();
@@ -903,6 +907,13 @@ namespace CapriDesktop
             if (smoke) Vault.Find = delegate { return null; };
             Coder.RootsPath = Path.Combine(data, "projects.txt");
             if (smoke) Coder.RunBuild = delegate(string folder, string buildCmd) { return "stub build output"; };
+            Phone.SettingsPath = Path.Combine(data, "phone.txt");
+            Phone.CachePath = Path.Combine(data, "phone.id");
+            if (smoke)
+            {
+                Phone.Http = delegate(string phoneMethod, string phonePath, string phoneBody) { throw new VoiceException("No real calls in the smoke test."); };
+                Phone.Sms = delegate(string smsUrl, string smsBody, string smsUser, string smsPassword) { throw new VoiceException("No real texts in the smoke test."); };
+            }
             Brain.PersonalityPath = Path.Combine(data, Brain.PersonalityName);
             if (smoke) foreach (string old in new[] { Brain.PersonalityPath, Brain.PersonalityBackup }) if (File.Exists(old)) File.Delete(old);
             Brain.MakePersonality();
@@ -913,6 +924,10 @@ namespace CapriDesktop
             crew.Hire = HireCrew;
             crew.Overseer = OverseerBrain;
             crew.Speak = delegate(string line) { Post(delegate { crewLines.Enqueue(line); }); };
+            Phone.Key = delegate { return voice.Key; };
+            Phone.AgentId = delegate { return preferences.AgentId; };
+            Phone.Open = delegate(string phoneFile) { Hands.ShowNote(phoneFile); };
+            Phone.Reported = delegate(string callReport) { Post(delegate { crewLines.Enqueue(callReport); }); };
             crew.Changed = delegate { Post(delegate { if (crewWindow != null && !crewWindow.IsDisposed && crewWindow.Visible) crewWindow.Reload(); }); };
             crew.Blackwall = delegate { return preferences.Bypass; };
             crew.OpenCodeModel = delegate { return preferences.OpenCodeModel; };
@@ -1042,7 +1057,7 @@ namespace CapriDesktop
             Hands.Work = RunJob;
             brain.Act = DoTool;
             Computer.Bypass = Safety.Bypass = preferences.Bypass;
-            Hands.Resume = ResumeJob;
+            Hands.Resume = delegate(string resumeText) { return Phone.Resume(resumeText) ?? ResumeJob(resumeText); };
             Hands.Rename = CallThem;
             Hands.Hush = Computer.Mask;
             Computer.Grab = HandsGrab;
@@ -5340,13 +5355,14 @@ namespace CapriDesktop
                 Post(delegate
                 {
                     if (agent != opened || dropping) return;
+                    if (clock.Elapsed.TotalSeconds < hushUntil) return;
                     if (Unprompted()) { dropping = true; checkedIn = true; speaker.Clear(); return; }
                     stirred = Environment.TickCount;
                     speaker.Play(samples);
                     if (!frames.Enabled && !hidden) frames.Start();
                 });
             };
-            opened.Interrupted += delegate { Post(delegate { if (agent == opened) speaker.Clear(); }); };
+            opened.Interrupted += delegate { Post(delegate { if (agent == opened) { speaker.Clear(); hushUntil = 0; } }); };
             opened.Closed += delegate(string problem) { Post(delegate { if (agent != opened) return; if (problem != null) ChatFailed(problem); else Rest(); }); };
             agent = opened;
             opened.Start(url, voiceId);
@@ -5661,7 +5677,12 @@ namespace CapriDesktop
                 }
             }
             Agent open = agent;
-            if (open != null) open.Send(speaker.Busy ? new short[chunk.Length] : chunk);
+            if (open == null) return;
+            if (open != bargeFor) { bargeFor = open; barge.Reset(); }
+            if (!speaker.Busy) { barge.Quiet(); open.Send(chunk); return; }
+            bool cut;
+            foreach (short[] piece in barge.While(chunk, out cut)) open.Send(piece);
+            if (cut) Post(delegate { if (agent != open) return; speaker.Clear(); hushUntil = clock.Elapsed.TotalSeconds + 1.5; });
         }
 
         internal void Hear(string text) { Hear(text, text, "> you: "); }
@@ -8523,6 +8544,87 @@ namespace CapriDesktop
                                                     checks.Add("PASS pairing on code: she reads the real file and lands on the error's line, finds text, builds for the true compiler error, skips build output, takes a plain \"my project is at\" and knows a stuck coding question from small talk");
                                                 }
                                                 finally { Coder.RootsPath = codeRootsWas; Coder.RunBuild = codeBuildWas; try { Directory.Delete(codeRoot, true); } catch (Exception) { } }
+                                            }
+                                            {
+                                                // Talking over her on a call: her echo stays held back, a voice over her for a third of a second cuts in.
+                                                Barge bargeCheck = new Barge();
+                                                short[] bargeEcho = new short[Ears.Chunk], bargeVoice = new short[Ears.Chunk];
+                                                for (int bi = 0; bi < Ears.Chunk; bi++) { bargeEcho[bi] = (short)(Math.Sin(bi * 0.3) * 1500); bargeVoice[bi] = (short)(Math.Sin(bi * 0.3) * 9000); }
+                                                bool bargeCut, bargeEchoSafe = true;
+                                                for (int bj = 0; bj < 20; bj++) { List<short[]> bargeSent = bargeCheck.While(bargeEcho, out bargeCut); if (bargeCut || bargeSent.Count != 1 || bargeSent[0][100] != 0) bargeEchoSafe = false; }
+                                                bargeCheck.While(bargeVoice, out bargeCut);
+                                                bool bargeBlipHeld = !bargeCut;
+                                                bargeCheck.While(bargeVoice, out bargeCut);
+                                                List<short[]> bargeThrough = bargeCheck.While(bargeVoice, out bargeCut);
+                                                bool bargeCutIn = bargeCut && bargeThrough.Count >= 3 && bargeCheck.In;
+                                                bargeCheck.Quiet();
+                                                if (!bargeEchoSafe || !bargeBlipHeld || !bargeCutIn || bargeCheck.In) throw new Exception("Talking over her went wrong: echo safe " + bargeEchoSafe + ", blip held " + bargeBlipHeld + ", cut in " + bargeCutIn);
+                                                checks.Add("PASS talking over her: her own echo never cuts her off, a blip doesn't either, and a voice over her for a third of a second stops her and reaches the call from the first word");
+                                            }
+                                            {
+                                                string phoneRoot = Path.Combine(Path.GetTempPath(), "capri-phone-" + Guid.NewGuid().ToString("N"));
+                                                string phoneSettingsWas = Phone.SettingsPath, phoneCacheWas = Phone.CachePath;
+                                                Func<string, string, string, string> phoneHttpWas = Phone.Http;
+                                                Func<string, string, string, string, string> phoneSmsWas = Phone.Sms;
+                                                Func<string> phoneKeyWas = Phone.Key, phoneAgentWas = Phone.AgentId;
+                                                Action<string> phoneOpenWas = Phone.Open, phoneReportedWas = Phone.Reported;
+                                                double phoneGapWas = Phone.ConfirmGap;
+                                                int phonePollWas = Phone.PollSeconds;
+                                                try
+                                                {
+                                                    Directory.CreateDirectory(phoneRoot);
+                                                    Phone.SettingsPath = Path.Combine(phoneRoot, "phone.txt");
+                                                    Phone.CachePath = Path.Combine(phoneRoot, "phone.id");
+                                                    string phoneOpened = null;
+                                                    Phone.Open = delegate(string phoneFileOpened) { phoneOpened = phoneFileOpened; };
+                                                    List<string> phoneReports = new List<string>();
+                                                    Phone.Reported = delegate(string phoneReport) { lock (phoneReports) phoneReports.Add(phoneReport); };
+                                                    List<string> phoneTraffic = new List<string>();
+                                                    Phone.Http = delegate(string phoneVerb, string phoneRoute, string phoneJson)
+                                                    {
+                                                        lock (phoneTraffic) phoneTraffic.Add(phoneVerb + " " + phoneRoute + " " + (phoneJson ?? ""));
+                                                        if (phoneRoute == "/v1/convai/phone-numbers") return "{\"phone_number_id\":\"phnum_1\"}";
+                                                        if (phoneRoute == "/v1/convai/twilio/outbound-call") return "{\"success\":true,\"conversation_id\":\"conv_9\"}";
+                                                        return "{\"status\":\"done\",\"analysis\":{\"transcript_summary\":\"He'll be home by 7.\"}}";
+                                                    };
+                                                    List<string> phoneTexts = new List<string>();
+                                                    Phone.Sms = delegate(string smsTo, string smsJson, string smsName, string smsSecret) { lock (phoneTexts) phoneTexts.Add(smsTo + " " + smsName + " " + smsJson); return "{\"id\":\"m1\",\"status\":\"queued\"}"; };
+                                                    Phone.Key = delegate { return "sk_test"; };
+                                                    Phone.AgentId = delegate { return "agent_1"; };
+                                                    Phone.PollSeconds = 0;
+                                                    string phoneNotSet = Phone.Handle(new ToolArguments { Name = "Toby", Text = "ask when he's home" });
+                                                    File.WriteAllText(Phone.SettingsPath, "twilio_sid=AC1\r\ntwilio_token=tok\r\ncaller_number=(469) 555-0100\r\nmy_name=Elijah\r\ncontact Toby=469-555-0123\r\nsms_username=AB\r\nsms_password=pw\r\n");
+                                                    Phone.ConfirmGap = 60;
+                                                    string phoneReady = Phone.Handle(new ToolArguments { Name = "Toby", Text = "ask when he's home" });
+                                                    string phoneTooSoon = Phone.Handle(new ToolArguments { Action = "confirm" });
+                                                    Phone.ConfirmGap = 0;
+                                                    string phoneDialed = Phone.Resume("yes");
+                                                    for (int pi = 0; pi < 100; pi++) { lock (phoneReports) if (phoneReports.Count > 0) break; System.Threading.Thread.Sleep(20); }
+                                                    string phoneCalls;
+                                                    lock (phoneTraffic) phoneCalls = string.Join(" | ", phoneTraffic.ToArray());
+                                                    string phoneTextReady = Phone.Texting(new ToolArguments { Name = "Toby", Text = "on my way" });
+                                                    string phoneTextSent = Phone.Resume("send it");
+                                                    string phoneReport0;
+                                                    lock (phoneReports) phoneReport0 = phoneReports.Count > 0 ? phoneReports[0] : "";
+                                                    string phoneTool;
+                                                    ToolArguments phoneArgs;
+                                                    bool phoneHeard = Hands.Heard("set up phone calls", out phoneTool, out phoneArgs) && phoneTool == "call" && phoneArgs.Action == "setup";
+                                                    if (phoneNotSet != Phone.NotSetUp || phoneOpened != Phone.SettingsPath
+                                                        || !phoneReady.StartsWith("Ready to call Toby at +1 (469) 555-0123", StringComparison.Ordinal) || phoneReady.IndexOf("AI assistant calling for Elijah", StringComparison.Ordinal) < 0
+                                                        || !phoneTooSoon.StartsWith("Read it back", StringComparison.Ordinal) || phoneDialed != "Calling Toby now. I'll tell you how it goes."
+                                                        || phoneCalls.IndexOf("\"to_number\":\"+14695550123\"", StringComparison.Ordinal) < 0 || phoneCalls.IndexOf("Never claim to be human", StringComparison.Ordinal) < 0
+                                                        || phoneReport0 != "Call with Toby is done. He'll be home by 7."
+                                                        || phoneTextReady != "Ready to text Toby at +1 (469) 555-0123: \"on my way\". Say yes and I'll send it." || phoneTextSent != "Sent to Toby." || phoneTexts.Count != 1 || phoneTexts[0].IndexOf("\"phoneNumbers\":[\"+14695550123\"]", StringComparison.Ordinal) < 0
+                                                        || !phoneHeard || !Hands.Wants("call Toby and ask when he's home") || Hands.Wants("call me a good boy") || !Hands.Valid("send_text", new ToolArguments { Action = "prepare", Name = "Toby", Text = "hi" }) || Hands.Valid("call", new ToolArguments { Action = "prepare" }))
+                                                        throw new Exception("Phone calls and texts went wrong: " + phoneNotSet + " | " + phoneReady + " | " + phoneTooSoon + " | " + phoneDialed + " | " + phoneReport0 + " | " + phoneTextReady + " | " + phoneTextSent + " | " + phoneCalls);
+                                                    checks.Add("PASS phone calls and texts: she reads back who and what, never dials or sends in the same breath, waits for a yes, opens a call as an AI assistant calling for them, reports back how it went, and texts from their own number");
+                                                }
+                                                finally
+                                                {
+                                                    Phone.SettingsPath = phoneSettingsWas; Phone.CachePath = phoneCacheWas; Phone.Http = phoneHttpWas; Phone.Sms = phoneSmsWas; Phone.Key = phoneKeyWas; Phone.AgentId = phoneAgentWas;
+                                                    Phone.Open = phoneOpenWas; Phone.Reported = phoneReportedWas; Phone.ConfirmGap = phoneGapWas; Phone.PollSeconds = phonePollWas;
+                                                    try { Directory.Delete(phoneRoot, true); } catch (Exception) { }
+                                                }
                                             }
                                         }
                                         string kaggleWas = Crew.KaggleHome;
@@ -11818,9 +11920,9 @@ namespace CapriDesktop
                                 throw new Exception("Job brain picks are wrong.");
                             Func<string, string> bestOf = delegate(string ids) { System.Collections.Generic.List<AgentBrain> list = new System.Collections.Generic.List<AgentBrain>(); foreach (string id in ids.Split(',')) list.Add(new AgentBrain { Id = id }); return Agent.Best(new AgentBrains { Llms = list.ToArray() }); };
                             if (bestOf("gemini-2.5-flash,claude-sonnet-4-5-20250929,claude-sonnet-4-5,claude-sonnet-4,claude-3-5-sonnet,claude-opus-5") != "claude-sonnet-4-5" || bestOf("gemini-2.5-flash,gemini-3.8-flash,gemini-3.8-flash-lite,gemini-4-argon,gpt-6.1") != "gemini-3.8-flash" || bestOf("gpt-4o,gpt-5.6,gpt-5.6-mini,gpt-6") != "gpt-6" || bestOf("qwen3-30b-a3b") != Agent.OldMind || Agent.Best(null) != Agent.OldMind) throw new Exception("Her call brain pick is wrong: " + bestOf("gemini-2.5-flash,claude-sonnet-4-5-20250929,claude-sonnet-4-5,claude-sonnet-4"));
-                            string[] wanted = { "http POST /v1/convai/agents/create sk_test_capri_1234 {\"name\":\"Capri\"", "\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45}", "http PATCH /v1/convai/agents/agent_old sk_test_capri_1234 {\"conversation_config\":{\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45},\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "\"tool_ids\":[\"tool_kept\",\"tool_1\",\"tool_2\",\"tool_3\",\"tool_4\",\"tool_5\",\"tool_6\",\"tool_7\",\"tool_8\",\"tool_9\",\"tool_10\",\"tool_11\",\"tool_12\",\"tool_13\",\"tool_14\",\"tool_15\",\"tool_16\"]", "\"tool_ids\":[\"tool_kept\",\"tool_17\",\"tool_18\",\"tool_19\",\"tool_20\",\"tool_21\",\"tool_22\",\"tool_23\",\"tool_24\",\"tool_25\",\"tool_26\",\"tool_27\",\"tool_28\",\"tool_29\",\"tool_30\",\"tool_31\",\"tool_32\"]}}}}", "\"name\":\"play_music\"", "\"name\":\"app_window\"", "\"name\":\"look_at_screen\"", "http GET /v1/convai/tools sk_test_capri_1234", "http POST /v1/convai/tools sk_test_capri_1234 {\"tool_config\":{\"type\":\"client\",\"name\":\"open_website\"", "\"name\":\"media\",\"description\":\"Control the music", "\"expects_response\":true,\"response_timeout_secs\":20}}", "You have tools for their PC", "tool {\"type\":\"client_tool_result\",\"tool_call_id\":\"call_1\",\"result\":\"Opened Spotify.\",\"is_error\":false}", "ran SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify", "Never check in", "beg them to talk or say they left you hanging", "\"prompt\":{\"prompt\":\"You are Capri", "\"llm\":\"claude-sonnet-5\"", "http GET /v1/convai/llm/list sk_test_capri_1234", "\"tts\":{\"voice_id\":\"abc\"}", "\"overrides\":{\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":true}},\"tts\":{\"voice_id\":true}}}", "http GET /v1/convai/conversation/get-signed-url?agent_id=agent_old sk_test_capri_1234", "init {\"type\":\"conversation_initiation_client_data\",\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "pong {\"type\":\"pong\",\"event_id\":7}", "chunk silent | chunk loud | chunk loud" };
+                            string[] wanted = { "http POST /v1/convai/agents/create sk_test_capri_1234 {\"name\":\"Capri\"", "\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45}", "http PATCH /v1/convai/agents/agent_old sk_test_capri_1234 {\"conversation_config\":{\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45},\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "\"tool_ids\":[\"tool_kept\",\"tool_1\",\"tool_2\",\"tool_3\",\"tool_4\",\"tool_5\",\"tool_6\",\"tool_7\",\"tool_8\",\"tool_9\",\"tool_10\",\"tool_11\",\"tool_12\",\"tool_13\",\"tool_14\",\"tool_15\",\"tool_16\",\"tool_17\",\"tool_18\"]", "\"tool_ids\":[\"tool_kept\",\"tool_19\",\"tool_20\",\"tool_21\",\"tool_22\",\"tool_23\",\"tool_24\",\"tool_25\",\"tool_26\",\"tool_27\",\"tool_28\",\"tool_29\",\"tool_30\",\"tool_31\",\"tool_32\",\"tool_33\",\"tool_34\",\"tool_35\",\"tool_36\"]}}}}", "\"name\":\"play_music\"", "\"name\":\"app_window\"", "\"name\":\"look_at_screen\"", "http GET /v1/convai/tools sk_test_capri_1234", "http POST /v1/convai/tools sk_test_capri_1234 {\"tool_config\":{\"type\":\"client\",\"name\":\"open_website\"", "\"name\":\"media\",\"description\":\"Control the music", "\"expects_response\":true,\"response_timeout_secs\":20}}", "You have tools for their PC", "tool {\"type\":\"client_tool_result\",\"tool_call_id\":\"call_1\",\"result\":\"Opened Spotify.\",\"is_error\":false}", "ran SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify", "Never check in", "beg them to talk or say they left you hanging", "\"prompt\":{\"prompt\":\"You are Capri", "\"llm\":\"claude-sonnet-5\"", "http GET /v1/convai/llm/list sk_test_capri_1234", "\"tts\":{\"voice_id\":\"abc\"}", "\"overrides\":{\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":true}},\"tts\":{\"voice_id\":true}}}", "http GET /v1/convai/conversation/get-signed-url?agent_id=agent_old sk_test_capri_1234", "init {\"type\":\"conversation_initiation_client_data\",\"conversation_config_override\":{\"agent\":{\"prompt\":{\"prompt\":\"You are Capri", "pong {\"type\":\"pong\",\"event_id\":7}", "chunk silent | chunk loud | chunk loud" };
                             foreach (string piece in wanted) if (log.IndexOf(piece, StringComparison.Ordinal) < 0) throw new Exception("Agent traffic was missing " + piece + ": " + log);
-                            if (log.IndexOf("tool_stale", StringComparison.Ordinal) >= 0 || System.Text.RegularExpressions.Regex.Matches(log, "http POST /v1/convai/tools").Count != 32) throw new Exception("Voice chat reused a stale tool or remade a kept one: " + log);
+                            if (log.IndexOf("tool_stale", StringComparison.Ordinal) >= 0 || System.Text.RegularExpressions.Regex.Matches(log, "http POST /v1/convai/tools").Count != 36) throw new Exception("Voice chat reused a stale tool or remade a kept one: " + log);
                             Hands.Run = handsRun;
                             Hands.Catalog = handsCatalog;
                             Hands.Forget();

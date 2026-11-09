@@ -81,6 +81,8 @@ namespace CapriDesktop
             "You can write notes, to-do lists and plans for them into a text file and open it in Notepad with write_note. " +
             "You can also read and write their Obsidian vault, their second brain, with vault: search it, read a note, add to a note or today's daily note, or make a new note. When they ask about their vault, Obsidian, their daily note or what their notes say, use vault, and when they ask you to put something in the vault, write it there instead of Notepad. " +
             "You can read and build their actual code with code: read a source file (land on a line), find text across the project, show its file tree, or build it to get the real compiler errors. When they're stuck on their code, pair with them: look at their screen to see what they're on, read the real file and build it to get the true error, tell them the actual cause, and walk them through the fix while they do the typing. " +
+            "You can place real phone calls for them with call: you read back who and why, they say yes, then you dial, open by saying you're an AI assistant calling for them, and report back how it went. " +
+            "You can text people from their own phone number with send_text: read the exact text back, and send it only once they say yes. " +
             "You also run a crew of workers for bigger jobs that take a while: a terminal worker for installs, setups and PowerShell, a Kaggle worker that runs their notebooks on Kaggle's GPUs, a research worker that reads the web and writes notes, an OpenCode builder for coding, and an apps worker that works inside their connected apps, like a real web browser it can click around in or GitHub (they add apps from the jobs board, or you can put your crew on adding one). Hand those over with start_job, then keep chatting: your crew reports back when they're done, and an overseer checks their work first. Check on them with jobs. When a job needs an API key or token, they save it in the Keys box on the jobs board and your workers use it without ever seeing it, so never ask them to say or paste a key to you. " +
             "Most messages are just chat, not jobs: answer those as yourself, with your own opinions and tastes, and don't offer to open, play or look at anything unless they ask.";
 
@@ -101,6 +103,8 @@ namespace CapriDesktop
             "Their projects in progress are orbits: when they check in, say what they did or what's next on a project, start or finish a project, or ask what they're doing today or what's on their plate, call orbit.\n" +
             "Their Obsidian vault is their second brain of notes: when they ask what's in it or what a note says, to find something in their notes there, to add something to a note or today's daily note, to put or save something in the vault, or tell you where their vault is, call vault. Putting something in the vault is vault, never write_note or remember.\n" +
             "Their code is real files on their PC: when they're working on their code and ask what's wrong, to look at an error, to read or find something in a source file, or tell you where their project is, call code. Pairing on code means look_at_screen to see where they are, then code to read the real file and build for the true error, before you diagnose. Don't hand their coding to a job or the crew; stay with them.\n" +
+            "When they ask you to phone, call or ring a person or a business, call call with action prepare to read the call back, and dial with action confirm only after they've said yes to it. A phone call is call, never use_computer; joining, leaving or ending a Discord or app call is still use_computer.\n" +
+            "When they ask you to text someone's phone, call send_text with action prepare and read the exact text back, and send with action confirm only after they've said yes to it. A text to a phone number is send_text; a message in Discord, WhatsApp or another app is still use_computer.\n" +
             "Never reply with a question about whether to do what they asked. Call the tool.\n" +
             "If they ask you to remember, note down or forget something about them, or to leave, make or save a memory, call remember with a short note about them in the third person.\n" +
             "Questions about their current screen or song need a tool too. If the target is unclear, pick the closest match yourself. For chat, negated or hypothetical requests, call no tool and reply with only the word: chat";
@@ -142,6 +146,10 @@ namespace CapriDesktop
               "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"search finds notes about something, read opens one note, add puts text at the end of a note, today reads today's daily note or adds text to it, new makes a note, recent lists the notes touched last, set saves where the vault is\",\"enum\":[\"search\",\"read\",\"add\",\"today\",\"new\",\"recent\",\"set\"]},\"search\":{\"type\":\"string\",\"description\":\"For search, what to look for\"},\"name\":{\"type\":\"string\",\"description\":\"The note's name, or folder/name, like Bandit or Plan/Mid-2027 Plan\"},\"text\":{\"type\":\"string\",\"description\":\"For add, today or new, the Markdown to write; for set, the vault's folder\"}},\"required\":[\"action\"]}" },
             { "code", "Read and build their real code to pair on it: read a source file (give a line number to land on the spot, even one from an error like Brain.cs(952,13)), find text across the project, show the file tree, or build it to get the true compiler errors. Use it when they're stuck on their code so you diagnose from the real file and real build output, not a screenshot alone. It only reads and compiles; it never edits their files, so they type the fix.",
               "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"read opens a source file, find searches the project for text, tree lists the files, build compiles it and returns the real errors, set tells you where the project is\",\"enum\":[\"read\",\"find\",\"tree\",\"build\",\"set\"]},\"name\":{\"type\":\"string\",\"description\":\"For read, the file, like Brain.cs or app/Brain.cs; a line from an error can be included, like Brain.cs(952,13)\"},\"level\":{\"type\":\"string\",\"description\":\"For read, a line number to center on\"},\"search\":{\"type\":\"string\",\"description\":\"For find, the text or symbol to look for\"},\"text\":{\"type\":\"string\",\"description\":\"For set, the project folder\"},\"target\":{\"type\":\"string\",\"description\":\"Which project, if they have more than one; usually leave empty\"}},\"required\":[\"action\"]}" },
+            { "call", "Place a real phone call for them through their phone number. Use it when they ask you to call, phone or ring a person or a business; not for voice chat with you, and not for Discord or app calls. prepare reads the call back and waits; confirm dials, only after they said yes to that exact call; cancel drops it; status checks how the last call went; setup opens their phone settings to fill in.",
+              "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"prepare reads the call back and waits for their yes, confirm dials only after they said yes, cancel drops it, status checks the last call, setup opens their phone settings\",\"enum\":[\"prepare\",\"confirm\",\"cancel\",\"status\",\"setup\"]},\"name\":{\"type\":\"string\",\"description\":\"Who to call, like Toby or a business\"},\"target\":{\"type\":\"string\",\"description\":\"Their phone number, if they gave one\"},\"text\":{\"type\":\"string\",\"description\":\"Why you're calling and what to say or find out, in their words\"}},\"required\":[\"action\"]}" },
+            { "send_text", "Send a text message (SMS) from their own phone number, through the SMS Gateway app on their Android phone. Use it when they ask you to text someone's phone; not for Discord, WhatsApp or other apps. prepare reads the exact text back and waits; confirm sends it, only after they said yes to that exact text; cancel drops it; setup opens their phone settings to fill in.",
+              "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"prepare reads the text back and waits for their yes, confirm sends it only after they said yes, cancel drops it, setup opens their phone settings\",\"enum\":[\"prepare\",\"confirm\",\"cancel\",\"setup\"]},\"name\":{\"type\":\"string\",\"description\":\"Who to text, like Toby\"},\"target\":{\"type\":\"string\",\"description\":\"Their phone number, if they gave one\"},\"text\":{\"type\":\"string\",\"description\":\"The text message, exactly as it should be sent\"}},\"required\":[\"action\"]}" },
             { "jobs", "Check on your crew's jobs, stop one, or open the jobs board.",
               "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"description\":\"What to do\",\"enum\":[\"list\",\"stop\",\"open\"]},\"name\":{\"type\":\"string\",\"description\":\"Which job, by number or name, for stop\"}},\"required\":[\"action\"]}" }
         };
@@ -168,6 +176,7 @@ namespace CapriDesktop
             @"|^(get|have|put|send|assign|set) (a |an |one of )?(your |the |my )?(models?|workers?|agents?|crew|ais?|someone|somebody|bots?)\b" +
             @"|^(write|jot|note|put|list|type) (it |this |that |these |them |those |everything |all (of )?(this|that|it) |some (stuff|things) |(my|the) (stuff|things|tasks) )?(down|out|up)\b|^(make|write|create|start|put together|organi[sz]e|draft) (me )?(a |an |my |the |some )?(organi[sz]ed |quick |new )?(to-?do|todo|task|checklist|list|note|notes|plan)\b|\b(in|into|on|to) (a |the |my )?(notepad|note ?pad|text file|notes file)\b|\bkaggle\b" +
             @"|^(?!.*\b(keys?|tokens?|api|passwords?|secrets?)\b).*\b(obsidian|(my|the|our|your) (obsidian )?vault|second brain|daily note|today'?s note)\b" +
+            @"|^(call|phone|ring|dial)\s+(?!(me|it|out|off|you|u|dibs|shotgun)\b)\S+(?!.*\b(on|in|via|through|over)\s+(the\s+|my\s+)?(discord|slack|teams|whatsapp|telegram|facetime|zoom|skype|messenger|signal)\b)|\b(make|place) a (phone )?call\b|\bset up (phone )?call(ing|s)?\b|\bhow did (the|that|my) (phone )?call go\b" +
             @"|^(check(ing)? in|quick check ?in)\b(?! on me)|^(what am i (doing|working on|supposed to (do|be doing))( today)?|what('?s| is) (on )?my (plate|orbits?|list)|what should i (do|work on|touch)( next| today)?|(add|put) .+ (in|into|to) (my )?orbits?|(i )?(finished|done with|wrapped up|landed) (my |the )?\w+)\b" +
             @"|^(ouvre|ouvrir|lancer?|d[ée]marrer?|fermer?|quitter?|r[ée]duis|r[ée]duire|minimiser?|chercher?|rechercher?|mets|mettre|jouer?|passer?|couper?|augmenter?|baisser?|regarder?|afficher?|montre-moi|va sur|aller sur|retourne sur)\b" +
             @"|^(tu vois|qu'est-ce que (tu vois|je fais)|c'est quoi (cette|la) (chanson|musique)|quelle (chanson|musique)|qu'est-ce qu'il y a sur mon [ée]cran)\b", RegexOptions.IgnoreCase);
@@ -256,6 +265,8 @@ namespace CapriDesktop
                 if (tool == "write_note") return WriteNote(args.Name, args.Text, args.Action);
                 if (tool == "vault") return Vault.Handle(args);
                 if (tool == "code") return Coder.Handle(args);
+                if (tool == "call") return Phone.Handle(args);
+                if (tool == "send_text") return Phone.Texting(args);
                 if (tool == "look_up") { Func<string, string> find = LookUp; return string.IsNullOrWhiteSpace(args.Search) ? "Look up what, choom?" : find == null ? OpenSite("google", args.Search) : find(args.Search.Trim()); }
                 if (tool == "start_job" || tool == "jobs") { Func<string, ToolArguments, string> crew = Crew; return crew == null ? "My crew isn't here yet." : crew(tool, args); }
                 return "There's no tool called " + tool + ".";
@@ -593,6 +604,8 @@ namespace CapriDesktop
             if (vaulted.Success && !Regex.IsMatch(vaulted.Groups[1].Value.Trim(), @"^(it|that|this|these|those|them|something|stuff)$", RegexOptions.IgnoreCase)) { tool = "vault"; args.Action = "today"; args.Text = "- " + vaulted.Groups[1].Value.Trim(); return true; }
             vaulted = Regex.Match(text, @"^my (?:obsidian )?vault is (?:at |in )(.{3,260})$", RegexOptions.IgnoreCase);
             if (vaulted.Success) { tool = "vault"; args.Action = "set"; args.Text = vaulted.Groups[1].Value.Trim().Trim('"'); return true; }
+            if (Regex.IsMatch(text, @"^(?:set ?up|open|show me) (?:my |the )?(?:phone calls?|calling|phone settings|phone\.txt)$", RegexOptions.IgnoreCase)) { tool = "call"; args.Action = "setup"; return true; }
+            if (Regex.IsMatch(text, @"^how did (?:the|that|my) (?:phone )?call go$", RegexOptions.IgnoreCase)) { tool = "call"; args.Action = "status"; return true; }
             Match coded = Regex.Match(text, @"^my (?:project|repo|code|codebase) is (?:at |in )(.{3,260})$", RegexOptions.IgnoreCase);
             if (coded.Success) { tool = "code"; args.Action = "set"; args.Text = coded.Groups[1].Value.Trim().Trim('"'); return true; }
             coded = Regex.Match(text, @"^(?:build|compile|run the build on|check) (?:my |the |this )?(?:project|code|build|app|solution)$", RegexOptions.IgnoreCase);
@@ -662,7 +675,7 @@ namespace CapriDesktop
 
         internal static bool Failed(string result) { return Regex.IsMatch(result ?? "", @"^(Which app|What should I play|Not (opening|playing) that|No app called|More than one|That didn't work|Couldn't|There's no|That isn't a website|Which job|Not doing that|Should I |Got lost|Ran out of steps|You pressed Esc|You grabbed the mouse|Using the mouse and keyboard isn't)|isn't open\.$|but (couldn't|it's still open)"); }
 
-        private static readonly Regex LooseText = new Regex(@"\b(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit|look_up|write_note|vault|code)\s*(\{[^{}]*\}|\([^()]*\))");
+        private static readonly Regex LooseText = new Regex(@"\b(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit|look_up|write_note|vault|code|call|send_text)\s*(\{[^{}]*\}|\([^()]*\))");
         private static readonly Regex ToolPair = new Regex(@"[""']?(\w+)[""']?\s*[:=]\s*(?:""([^""]*)""|'([^']*)'|([^,})\s][^,})]*))");
 
         private static ToolArguments Pairs(string tool, string call)
@@ -695,7 +708,7 @@ namespace CapriDesktop
             else if (key == "minutes") args.Minutes = value;
         }
 
-        private static readonly Regex ToolText = new Regex(@"\A(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit|look_up|write_note|vault|code)\s*(\{.*\})\z", RegexOptions.Singleline);
+        private static readonly Regex ToolText = new Regex(@"\A(open_app|open_website|media|look_at_screen|play_music|app_window|use_computer|shortcut|remember|power|start_job|jobs|orbit|look_up|write_note|vault|code|call|send_text)\s*(\{.*\})\z", RegexOptions.Singleline);
 
         internal static bool Typed(string reply, out string tool, out ToolArguments args, bool loose = false)
         {
@@ -753,6 +766,18 @@ namespace CapriDesktop
             if (tool == "write_note") return Named(args.Text) && (string.IsNullOrEmpty(args.Action) || args.Action == "new" || args.Action == "add");
             if (tool == "jobs") return Regex.IsMatch(args.Action ?? "list", @"\A(list|stop|open)\z");
             if (tool == "look_up") return Named(args.Search);
+            if (tool == "send_text")
+            {
+                string texting = (args.Action ?? "").Trim().ToLowerInvariant();
+                if (texting == "confirm" || texting == "cancel" || texting == "setup") return true;
+                return (texting == "" || texting == "prepare") && (Named(args.Name) || Named(args.Target)) && Named(args.Text);
+            }
+            if (tool == "call")
+            {
+                string dialing = (args.Action ?? "").Trim().ToLowerInvariant();
+                if (dialing == "confirm" || dialing == "cancel" || dialing == "status" || dialing == "setup") return true;
+                return (dialing == "" || dialing == "prepare") && (Named(args.Name) || Named(args.Target));
+            }
             if (tool == "code")
             {
                 string doing = args.Action ?? "";
