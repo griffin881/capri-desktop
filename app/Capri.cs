@@ -902,7 +902,7 @@ namespace CapriDesktop
             Vault.SavedPath = Path.Combine(data, "vault.txt");
             if (smoke) Vault.Find = delegate { return null; };
             Coder.RootsPath = Path.Combine(data, "projects.txt");
-            if (smoke) Coder.RunBuild = delegate(string folder, string command) { return "stub build output"; };
+            if (smoke) Coder.RunBuild = delegate(string folder, string buildCmd) { return "stub build output"; };
             Brain.PersonalityPath = Path.Combine(data, Brain.PersonalityName);
             if (smoke) foreach (string old in new[] { Brain.PersonalityPath, Brain.PersonalityBackup }) if (File.Exists(old)) File.Delete(old);
             Brain.MakePersonality();
@@ -8504,7 +8504,7 @@ namespace CapriDesktop
                                                     File.WriteAllText(Path.Combine(codeProj, "app", "Brain.cs"), "line1\nline2\npublic void Think() {\n  int x = parse(cfg);\n}\n");
                                                     File.WriteAllText(Path.Combine(codeProj, "bin", "junk.cs"), "ignore me");
                                                     Coder.RootsPath = Path.Combine(codeRoot, "projects.txt");
-                                                    Coder.RunBuild = delegate(string folder, string command) { return "Brain.cs(4,11): error CS0103: 'parse' does not exist\nBuild FAILED."; };
+                                                    Coder.RunBuild = delegate(string folder, string buildCmd) { return "Brain.cs(4,11): error CS0103: 'parse' does not exist\nBuild FAILED."; };
                                                     string codeMissing = Coder.Handle(new ToolArguments { Action = "build" });
                                                     string codeSet = Coder.Handle(new ToolArguments { Action = "set", Text = codeProj });
                                                     string codeRead = Coder.Handle(new ToolArguments { Action = "read", Name = "Brain.cs(4,11)" });
