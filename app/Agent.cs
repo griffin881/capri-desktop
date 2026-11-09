@@ -115,7 +115,7 @@ namespace CapriDesktop
     internal sealed class Agent : IDisposable
     {
         internal const double Pace = 15;
-        internal const int Version = 21;
+        internal const int Version = 22;
         private const string Patience = "\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45}";
         internal event Action<int> Opened;
         internal event Action<string> Heard;
@@ -132,7 +132,7 @@ namespace CapriDesktop
         // Her chat so far, sent with the call's opening so she picks up where they left off.
         internal string Memory = "";
 
-        internal static string Prompt { get { return Brain.Persona + Hands.Note + "\nYou are talking out loud on a live call. Banter stays short, one to three spoken sentences. When you're going off about something, or they ask you to explain or go deeper, take as long as it needs, still spoken: no lists, no headings, and never write tags in square brackets.\nIf they mention a person, an event or anything you don't know, or that might have changed since you last heard, call look_up first and answer from what you find. Never say you don't know who someone is.\nIf the user goes quiet, they're busy, gaming or muted: stay quiet until they talk to you. Never check in, ask if they're still there, beg them to talk or say they left you hanging.\nSo the voice says your slang right, always spell choom as chewm, preem as preme and yezzirrr as yessirrr. Say chewm rarely, at most once every few replies and never on its own."; } }
+        internal static string Prompt { get { return Brain.Persona + Hands.Note + "\nYou are talking out loud on a live call. Banter stays short, one to three spoken sentences. When you're going off about something, or they ask you to explain or go deeper, take as long as it needs, still spoken: no lists, no headings, and never write tags in square brackets.\nWhen you help with their code on a call, remember they can't act on code you only say out loud, it's gone the moment you say it. So whenever you give them a fix, a command, a file and line, or any code, write it down with write_note, named something like \"Capri fix\", so it stays on their screen to read and type from; say the gist out loud and keep the exact code and the steps in the note, and add to that same note as you go. Read the real file with the code tool and build it for the true error first, the way you always would.\nIf they mention a person, an event or anything you don't know, or that might have changed since you last heard, call look_up first and answer from what you find. Never say you don't know who someone is.\nIf the user goes quiet, they're busy, gaming or muted: stay quiet until they talk to you. Never check in, ask if they're still there, beg them to talk or say they left you hanging.\nSo the voice says your slang right, always spell choom as chewm, preem as preme and yezzirrr as yessirrr. Say chewm rarely, at most once every few replies and never on its own."; } }
 
         // ElevenLabs keeps its own copy of her prompt, so her agent is tuned again after an update or when personality.md changes.
         internal static bool Stale(int version, string personality) { return version < Version || (personality ?? "") != Brain.PersonalityStamp; }
